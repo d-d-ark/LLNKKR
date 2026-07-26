@@ -1,0 +1,97 @@
+/* 해킹은 범죄입니다. LLNKKR 서비스와 API를 악용하지 마세요. */
+.entry-chat-workspace-thumbnail-floating {
+  position: absolute;
+  top: 50%;
+  z-index: 10;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  box-sizing: border-box;
+  height: 32px;
+  max-width: min(520px, calc(100% - 16px));
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #ffffff;
+  box-shadow: none;
+  transform: translateY(-50%);
+}
+
+.entry-chat-workspace-thumbnail-floating button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid #9ab6ff;
+  border-radius: 16px;
+  background: #6e97ff;
+  color: #ffffff;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.entry-chat-workspace-thumbnail-floating button:hover {
+  background: #7da3ff;
+}
+
+.entry-chat-workspace-thumbnail-floating.has-image button {
+  background: #14b86a;
+}
+
+.entry-chat-workspace-thumbnail-floating.has-image button:hover {
+  background: #0f9f76;
+}
+
+.entry-chat-workspace-thumbnail-floating .entry-chat-symbol {
+  display: block;
+  flex: 0 0 18px;
+  width: 18px;
+  height: 18px;
+  font-size: 18px;
+  line-height: 18px;
+}
+
+.entry-chat-workspace-thumbnail-floating button > span:not(.entry-chat-symbol) {
+  display: block;
+  line-height: 16px;
+}
+
+.entry-chat-workspace-thumbnail-floating [data-role="workspaceThumbnailStatus"] {
+  display: none;
+  align-items: center;
+  box-sizing: border-box;
+  height: 28px;
+  overflow: hidden;
+  max-width: 240px;
+  padding: 0 8px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.16);
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.entry-chat-workspace-thumbnail-floating.has-image [data-role="workspaceThumbnailStatus"],
+.entry-chat-workspace-thumbnail-floating.has-error [data-role="workspaceThumbnailStatus"] {
+  display: inline-flex;
+}
+
+.entry-chat-workspace-thumbnail-floating.has-image [data-role="workspaceThumbnailStatus"] {
+  color: #ffffff;
+}
+
+.entry-chat-workspace-thumbnail-floating.has-error {
+  border-color: rgba(220, 38, 38, 0.46);
+}
+
+.entry-chat-workspace-thumbnail-floating.has-error [data-role="workspaceThumbnailStatus"] {
+  color: #dc2626;
+}

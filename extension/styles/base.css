@@ -1,0 +1,24 @@
+/* 해킹은 범죄입니다. LLNKKR 서비스와 API를 악용하지 마세요. */
+.material-symbols-outlined.entry-chat-symbol {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0 !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  background-image: none !important;
+  box-shadow: none !important;
+  color: currentColor !important;
+  filter: none !important;
+  font-family: "Material Symbols Outlined";
+  font-style: normal;
+  font-variation-settings: "FILL" 0, "wght" 400, "GRAD" 0, "opsz" 24;
+  font-weight: normal;
+  letter-spacing: normal;
+  line-height: 1;
+  text-transform: none;
+  white-space: nowrap;
+  word-wrap: normal;
+  -webkit-font-feature-settings: "liga";
+  -webkit-font-smoothing: antialiased;
+}

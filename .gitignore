@@ -1,0 +1,25 @@
+config.php
+*.log
+*.zip
+*.pem
+*.crx
+.env
+dist/
+_deploy_*
+.DS_Store
+Thumbs.db
+
+server/*
+!server/api/
+server/api/*
+!server/api/ringcl/
+!server/api/v1/
+server/api/ringcl/*
+!server/api/ringcl/images.php
+!server/api/ringcl/lib.php
+server/api/v1/*
+!server/api/v1/shorten.php
+
+# Public release archives live only in release/.
+!release/
+!release/*.zip

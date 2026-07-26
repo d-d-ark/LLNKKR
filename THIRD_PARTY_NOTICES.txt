@@ -1,0 +1,20 @@
+Material Symbols
+Copyright Google LLC
+Licensed under the Apache License, Version 2.0.
+
+Bundled file:
+extension/popup/material-symbols-outlined.woff2
+
+License text:
+licenses/Apache-2.0.txt
+
+Simple Icons
+https://simpleicons.org/
+Licensed under CC0 1.0 Universal.
+
+Bundled files:
+server/assets/social/chrome.svg
+server/assets/social/github.svg
+server/assets/social/discord.svg
+
+Brand names and logos remain trademarks of their respective owners.

@@ -1,0 +1,55 @@
+<!-- 해킹은 범죄입니다. LLNKKR 서비스와 API를 악용하지 마세요. -->
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>엔트리 링클 - LLNKKR</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="app-header">
+      <img src="../icons/icon48.png" width="36" height="36" alt="">
+      <div class="app-heading">
+        <h1>LLNKKR</h1>
+        <p>엔트리 링클 <span id="version"></span></p>
+      </div>
+      <button id="themeButton" class="icon-button" type="button" aria-label="다크모드 켜기" aria-pressed="false">
+        <span class="material-symbols-outlined" aria-hidden="true">dark_mode</span>
+      </button>
+    </header>
+
+    <main>
+      <div class="section-title"><span class="material-symbols-outlined" aria-hidden="true">tune</span>설정</div>
+      <div class="setting-list">
+        <label class="setting-row" title="엔트리 전체에 어두운 화면을 적용합니다.">
+          <span class="material-symbols-outlined setting-icon" aria-hidden="true">dark_mode</span><strong>다크모드</strong>
+          <input data-setting="darkMode" type="checkbox"><i aria-hidden="true"></i>
+        </label>
+        <label class="setting-row" title="작성 내용을 계정별로 최대 1일간 보관합니다.">
+          <span class="material-symbols-outlined setting-icon" aria-hidden="true">edit_note</span><strong>작성 내용 자동 저장</strong>
+          <input data-setting="draft" type="checkbox"><i aria-hidden="true"></i>
+        </label>
+        <label class="setting-row" title="5초 간격으로 새로운 글을 확인합니다.">
+          <span class="material-symbols-outlined setting-icon" aria-hidden="true">dynamic_feed</span><strong>실시간 새 글</strong>
+          <input data-setting="liveRefresh" type="checkbox"><i aria-hidden="true"></i>
+        </label>
+        <label class="setting-row" title="스크롤 위치에 맞춰 다음 글을 불러옵니다.">
+          <span class="material-symbols-outlined setting-icon" aria-hidden="true">expand_circle_down</span><strong>자동 더보기</strong>
+          <input data-setting="autoMore" type="checkbox"><i aria-hidden="true"></i>
+        </label>
+        <label class="setting-row" title="작품 링크가 포함된 홍보글을 숨깁니다.">
+          <span class="material-symbols-outlined setting-icon" aria-hidden="true">visibility_off</span><strong>홍보글 숨김</strong>
+          <input data-setting="hidePromotions" type="checkbox"><i aria-hidden="true"></i>
+        </label>
+        <label class="setting-row" title="첨부 이미지를 가린 상태로 표시합니다.">
+          <span class="material-symbols-outlined setting-icon" aria-hidden="true">hide_image</span><strong>이미지 스포일러</strong>
+          <input data-setting="imageSpoiler" type="checkbox"><i aria-hidden="true"></i>
+        </label>
+      </div>
+    </main>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>
