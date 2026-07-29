@@ -1,4 +1,3 @@
-// 해킹은 범죄입니다. LLNKKR 서비스와 API를 악용하지 마세요.
 (() => {
   "use strict";
 
@@ -10,6 +9,7 @@
   let observer = null;
   let hydrationFrame = 0;
   let hydrationTimer = 0;
+  let stabilizationTimers = [];
   let lastProfileId = "";
 
   function profileIdFromPath() {
@@ -64,6 +64,30 @@
     bio.replaceChildren(fragment);
   }
 
+  function normalizeProfileCommunityBackgrounds() {
+    const dark = document.documentElement.classList.contains("entry-chat-dark-mode");
+    const elements = document.querySelectorAll(
+      ".css-m0nf83.ebifrqs1, button.active.css-1oz7jgs.e1raq2kp3, [data-entry-llnk-profile-transparent='1']"
+    );
+    elements.forEach((element) => {
+      if (dark && element.matches(".css-m0nf83.ebifrqs1, button.active.css-1oz7jgs.e1raq2kp3")) {
+        element.dataset.entryLlnkProfileTransparent = "1";
+        element.style.setProperty("background", "transparent", "important");
+        element.style.setProperty("background-color", "transparent", "important");
+        element.style.setProperty("background-image", "none", "important");
+        element.style.setProperty("box-shadow", "none", "important");
+        element.style.setProperty("transition", "none", "important");
+        return;
+      }
+      if (element.dataset.entryLlnkProfileTransparent === "1") {
+        delete element.dataset.entryLlnkProfileTransparent;
+        ["background", "background-color", "background-image", "box-shadow", "transition"].forEach((property) => {
+          element.style.removeProperty(property);
+        });
+      }
+    });
+  }
+
   function refresh(root = document) {
     const profileId = profileIdFromPath();
     if (!profileId) return;
@@ -72,6 +96,7 @@
       root = document;
     }
     linkifyBio();
+    normalizeProfileCommunityBackgrounds();
   }
 
   function scheduleHydration(root = document) {
@@ -94,13 +119,25 @@
       scheduleHydration(root);
     }, 90);
     observer = new MutationObserver(schedule);
-    observer.observe(document.body || document.documentElement, { childList: true, subtree: true });
+    observer.observe(document.body || document.documentElement, {
+      attributes: true,
+      attributeFilter: ["class"],
+      childList: true,
+      subtree: true
+    });
+    const themeObserver = new MutationObserver(() => scheduleHydration(document));
+    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+    stabilizationTimers = [400, 900, 1800].map((delay) => window.setTimeout(() => refresh(document), delay));
+    document.addEventListener("click", () => scheduleHydration(document), true);
     window.addEventListener("popstate", () => scheduleHydration(document));
     window.addEventListener("pageshow", () => scheduleHydration(document));
     window.addEventListener("pagehide", () => {
       observer?.disconnect();
+      themeObserver.disconnect();
       window.cancelAnimationFrame(hydrationFrame);
       window.clearTimeout(hydrationTimer);
+      stabilizationTimers.forEach((timer) => window.clearTimeout(timer));
+      stabilizationTimers = [];
     }, { once: true });
   }
 

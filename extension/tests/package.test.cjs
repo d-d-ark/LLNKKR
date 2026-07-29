@@ -1,4 +1,3 @@
-// 해킹은 범죄입니다. LLNKKR 서비스와 API를 악용하지 마세요.
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -8,7 +7,7 @@ const manifest = JSON.parse(fs.readFileSync(path.join(root, "manifest.json"), "u
 
 assert.equal(manifest.manifest_version, 3);
 assert.equal(manifest.name, "엔트리 링클 - LLNKKR");
-assert.equal(manifest.version, "0.1.16");
+assert.match(manifest.version, /^\d+\.\d+\.\d+$/);
 assert.deepEqual(manifest.permissions, ["storage"]);
 assert.deepEqual(manifest.host_permissions, ["https://llnk.kr/*"]);
 assert.equal(manifest.background, undefined);

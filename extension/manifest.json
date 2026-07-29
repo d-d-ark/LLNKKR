@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "엔트리 링클 - LLNKKR",
-  "version": "0.1.16",
+  "version": "0.2.26",
   "description": "Less fluff. Pure function.",
   "icons": {
     "16": "icons/icon16.png",
@@ -28,7 +28,8 @@
         "src/dark-mode.js"
       ],
       "css": [
-        "styles/dark-mode.css"
+        "styles/dark-mode.css",
+        "styles/dark-mode-pages.css"
       ],
       "run_at": "document_start",
       "all_frames": true
@@ -87,8 +88,11 @@
       "resources": [
         "src/common.js",
         "src/entrystory.js",
+        "src/entrystory-native-live.js",
+        "src/profile.js",
         "styles/base.css",
         "styles/entrystory.css",
+        "styles/profile.css",
         "src/thumbnail-runtime.js",
         "src/bloupla-image-frame.html",
         "src/bloupla-image-frame.js",

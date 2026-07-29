@@ -1,4 +1,3 @@
-// 해킹은 범죄입니다. LLNKKR 서비스와 API를 악용하지 마세요.
 (() => {
   "use strict";
 
@@ -10,6 +9,7 @@
   const POST_SELECTOR = "li.css-tasfte.eqmdslz0, li[class~='eqmdslz0']";
   const BODY_SELECTOR = ".css-6wq60h.eqt5hs60, [class~='eqt5hs60']";
   const LIST_SELECTOR = ".css-1i5jedo.e1lgujxn5, [class~='e1lgujxn5']";
+  const METRIC_SELECTOR = "a.like, a.reply, [data-entry-chat-live-like='1'], [data-entry-chat-live-reply='1']";
   const WRITER_SELECTOR = "textarea#Write, textarea[name='Write']";
   const MAX_POST_LENGTH = 500;
   const MAX_LINE_BREAKS = 10;
@@ -20,6 +20,43 @@
   const DRAFT_SAVE_DELAY_MS = 240;
   const DRAFT_GUARD_INTERVAL_MS = 300;
   const LIVE_REFRESH_MS = 5000;
+  const DEFAULT_STORY_FILTERS = Object.freeze({
+    projectLinks: true,
+    entryLinks: false,
+    externalLinks: false,
+    naverShortLinks: false,
+    allLinks: false,
+    images: false,
+    entryEmoticons: false,
+  });
+  const STORY_FILTER_OPTIONS = Object.freeze([
+    { key: "allLinks", label: "모든 링크", depth: 0, children: ["entryLinks", "externalLinks"] },
+    { key: "entryLinks", label: "엔트리 링크", depth: 1, parent: "allLinks", children: ["projectLinks"] },
+    { key: "projectLinks", label: "엔트리 작품 링크", depth: 2, parent: "entryLinks" },
+    { key: "externalLinks", label: "엔트리 외부 링크", depth: 1, parent: "allLinks", children: ["naverShortLinks"] },
+    { key: "naverShortLinks", label: "네이버 단축 링크", depth: 2, parent: "externalLinks" },
+    { key: "images", label: "이미지", depth: 0, startsSection: true },
+    { key: "entryEmoticons", label: "엔트리 이모티콘", depth: 0 },
+  ]);
+  const DEFAULT_PAGE_SETTINGS = Object.freeze({
+    darkMode: false,
+    draft: true,
+    liveRefresh: true,
+    spaceshipMotion: true,
+    autoMore: true,
+    imageSpoiler: true,
+    shortenProjectLinks: true,
+  });
+  const STORY_SETTING_OPTIONS = Object.freeze([
+    { key: "darkMode", label: "다크모드", icon: "dark_mode" },
+    { key: "draft", label: "작성 내용 자동 저장", icon: "edit_note" },
+    { key: "liveRefresh", label: "실시간 새 글", icon: "dynamic_feed" },
+    { key: "spaceshipMotion", label: "우주선 모션", icon: "rocket_launch" },
+    { key: "autoMore", label: "자동 더보기", icon: "expand_circle_down" },
+    { key: "imageSpoiler", label: "이미지 스포일러", icon: "hide_image" },
+    { key: "shortenProjectLinks", label: "작품 링크 줄이기", icon: "link" },
+  ]);
+  const STORY_FILTER_OPTION_MAP = new Map(STORY_FILTER_OPTIONS.map((option) => [option.key, option]));
   const state = {
     observer: null,
     draftObserver: null,
@@ -47,16 +84,33 @@
     draftOwnerVerification: null,
     draftSubmitPendingUntil: 0,
     draftSubmittedValue: "",
+    draftSubmittedAt: 0,
     draftFailureWatchTimer: 0,
+    draftSubmitClearTimer: 0,
     uploadCleanup: null,
-    hidePromotions: true,
+    storyFilters: { ...DEFAULT_STORY_FILTERS },
+    pageSettings: { ...DEFAULT_PAGE_SETTINGS },
+    storyFilterEventsBound: false,
+    storyNativeSortEventsBound: false,
+    replyFoldEventsBound: false,
     autoMoreEnabled: true,
     liveRefreshEnabled: true,
     livePosts: [],
+    spaceshipMotionEnabled: true,
+    liveArrivalCleanups: new Set(),
+    liveUpdateLayouts: new Map(),
+    liveRowPositions: new Map(),
+    nativeRemovalPending: false,
+    nativeArrivalPending: 0,
+    nativeArrivalSequence: 0,
+    nativeArrivalExpiresAt: 0,
+    nativeArrivalScrollAnchor: null,
     imageSpoilerEnabled: true,
+    shortenProjectLinksEnabled: true,
     draftEnabled: true,
     blouplaFrames: new Map(),
   };
+  const metricAnimationTimers = new WeakMap();
 
   const IMAGE_SHORT_LINK_BASE = "https://Llnk.kr/i";
   const IMAGE_SHORT_LINK_RE = /https:\/\/llnk\.kr\/(?:i[a-z0-9]{4}|i\.php\?c=[a-z0-9]{4})\b/i;
@@ -68,6 +122,21 @@
 
   function isEntryStoryListPage() {
     return /^\/community\/entrystory(?:\/|$)/.test(location.pathname);
+  }
+
+  function isLiveEntryStoryPage() {
+    if (location.pathname !== "/community/entrystory/list") return false;
+    const params = new URLSearchParams(location.search);
+    if (params.getAll("sort").length !== 1 || params.getAll("term").length !== 1) return false;
+    const keys = [...params.keys()];
+    return keys.length === 2
+      && keys.every((key) => key === "sort" || key === "term")
+      && params.get("sort") === "created"
+      && params.get("term") === "all";
+  }
+
+  function syncLiveStoryToolbarScope() {
+    document.documentElement.classList.toggle("entry-llnk-live-story-toolbar", isLiveEntryStoryPage());
   }
 
   function getImageShortLinkCode(value) {
@@ -116,13 +185,16 @@
         continue;
       }
       const isSpaceMarker = !inCode && source.startsWith(LINE_BREAK_MARKER, index);
-      const markerLength = isSpaceMarker ? LINE_BREAK_MARKER.length : 0;
+      const isNewline = !inCode && (source[index] === "\n" || source[index] === "\r");
+      const markerLength = isSpaceMarker
+        ? LINE_BREAK_MARKER.length
+        : (isNewline && source[index] === "\r" && source[index + 1] === "\n" ? 2 : (isNewline ? 1 : 0));
       if (markerLength) {
         markerCount += 1;
         consecutiveCount += 1;
         if (markerCount <= MAX_LINE_BREAKS && consecutiveCount <= 4) {
           output += source.slice(index, index + markerLength);
-        } else if (isSpaceMarker) {
+        } else {
           output += " ";
         }
         index += markerLength;
@@ -184,14 +256,14 @@
         if (url) {
           const imageCode = getImageShortLinkCode(url);
           if (imageCode) {
-            nodes.push(createImageCard({ code: imageCode, source: "llnk" }));
+            nodes.push(createImageCard({ code: imageCode, fallbackUrl: url.href, source: "llnk" }));
             if (trailing) appendPlainText(nodes, trailing);
             index += urlMatch[0].length;
             continue;
           }
           const blouplaImageUrl = getBlouplaImageUrl(url);
           if (blouplaImageUrl) {
-            nodes.push(createImageCard({ directUrl: blouplaImageUrl, source: "bloupla" }));
+            nodes.push(createImageCard({ directUrl: blouplaImageUrl, fallbackUrl: url.href, source: "bloupla" }));
             if (trailing) appendPlainText(nodes, trailing);
             index += urlMatch[0].length;
             continue;
@@ -250,6 +322,7 @@
     card.dataset.entryLlnkLazyType = "image";
     card.dataset.entryLlnkCode = marker.code || "";
     card.dataset.entryLlnkDirectUrl = marker.directUrl || "";
+    card.dataset.entryLlnkFallbackUrl = marker.fallbackUrl || marker.directUrl || "";
     card.dataset.entryLlnkSource = marker.source || "";
     const loading = document.createElement("span");
     loading.className = "entry-chat-image-loading";
@@ -257,6 +330,24 @@
     card.appendChild(loading);
     observeLazyCard(card);
     return card;
+  }
+
+  function showImageFallbackLink(card) {
+    if (!card) return false;
+    const original = text(card.dataset.entryLlnkFallbackUrl).trim();
+    const safe = safeHttpUrl(original);
+    if (!safe) return false;
+    const link = document.createElement("a");
+    link.className = "entry-chat-md-link entry-chat-message-link entry-chat-image-fallback-link";
+    link.href = safe.href;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = original;
+    link.addEventListener("click", (event) => event.stopPropagation());
+    card.className = "entry-chat-image-fallback";
+    card.style.removeProperty("width");
+    card.replaceChildren(link);
+    return true;
   }
 
   function createImageSourceBadge(source) {
@@ -305,27 +396,68 @@
     $$('a[href]', clone).forEach((anchor) => {
       const shortLink = imageShortLinkFromAnchor(anchor);
       if (shortLink) anchor.textContent = shortLink;
+      if (anchor.dataset.entryLlnkProjectLink === "1") {
+        anchor.textContent = anchor.dataset.entryLlnkProjectOriginalText || anchor.getAttribute("href") || anchor.textContent;
+      }
     });
     return text(clone.textContent).trim();
+  }
+
+  function isExtensionOwnedPostBody(body) {
+    return body?.dataset?.entryLlnkOwned === "1"
+      || body?.dataset?.entryChatLiveBody === "1";
+  }
+
+  function nativePostRenderLayer(body) {
+    let layer = body.querySelector(":scope > .entry-llnk-native-render-layer");
+    if (layer) return layer;
+    const computed = getComputedStyle(body);
+    body.style.setProperty("--entry-llnk-native-font-size", computed.fontSize || "14px");
+    body.style.setProperty("--entry-llnk-native-line-height", computed.lineHeight === "normal" ? "1.5" : computed.lineHeight);
+    body.style.setProperty("--entry-llnk-native-color", computed.color || "currentColor");
+    layer = document.createElement("span");
+    layer.className = "entry-llnk-native-render-layer";
+    layer.dataset.entryLlnkOwned = "1";
+    body.appendChild(layer);
+    return layer;
+  }
+
+  function renderNativePostBody(body, value) {
+    const layer = nativePostRenderLayer(body);
+    layer.replaceChildren(...renderContent(value));
+    body.classList.add("entry-chat-markdown-rendered", "entry-llnk-native-render-host");
   }
 
   function renderPostBody(body, source, force = false) {
     const value = text(source).trim();
     if (!body || !value) return false;
     const signature = `${value.length}:${value.slice(0, 80)}:${value.slice(-40)}`;
-    if (body.dataset.entryLlnkSignature === signature && body.dataset.entryChatLiveRaw === value) return false;
+    const ownedBody = isExtensionOwnedPostBody(body);
+    const nativeLayer = ownedBody ? null : body.querySelector(":scope > .entry-llnk-native-render-layer");
+    if (
+      body.dataset.entryLlnkSignature === signature
+      && body.dataset.entryChatLiveRaw === value
+      && (ownedBody || nativeLayer || !hasRenderableSyntax(value))
+    ) return false;
     body.dataset.entryLlnkSignature = signature;
     body.dataset.entryChatLiveRaw = value;
     if (hasRenderableSyntax(value)) {
       body.dataset.entryLlnkOriginal = value;
-      body.replaceChildren(...renderContent(value));
-      body.classList.add("entry-chat-markdown-rendered");
-      body.dataset.entryLlnkOwned = "1";
+      if (ownedBody) {
+        body.replaceChildren(...renderContent(value));
+        body.classList.add("entry-chat-markdown-rendered");
+      } else {
+        renderNativePostBody(body, value);
+      }
     } else if (force) {
-      body.textContent = value;
-      body.classList.remove("entry-chat-markdown-rendered");
-      delete body.dataset.entryLlnkOwned;
-      delete body.dataset.entryLlnkOriginal;
+      if (ownedBody) {
+        body.textContent = value;
+        body.classList.remove("entry-chat-markdown-rendered");
+        delete body.dataset.entryLlnkOriginal;
+      } else {
+        renderNativePostBody(body, value);
+        body.dataset.entryLlnkOriginal = value;
+      }
     }
     return true;
   }
@@ -392,14 +524,15 @@
     if (!source) return;
     if (!renderPostBody(body, source)) {
       shortenProjectLinks(post);
-      applyPromotionFilter(post);
+      applyStoryFilters(post);
       return;
     }
     shortenProjectLinks(post);
-    applyPromotionFilter(post);
+    applyStoryFilters(post);
   }
 
   function processRoot(root = document, options = {}) {
+    syncLiveStoryToolbarScope();
     if (!isEntryStoryPage()) {
       removeScrollTopButton();
       document.documentElement.classList.remove("entry-chat-image-spoiler-enabled");
@@ -414,10 +547,11 @@
     }
     posts.push(...$$(POST_SELECTOR, root));
     [...new Set(posts)].slice(0, 160).forEach(processPost);
+    syncMetricCounters(root);
     if (!options.skipPageUi) {
       ensureWriterTools();
       ensureScrollTopButton();
-      ensurePromotionToggle();
+      ensureStoryFilterMenu();
       if (isEntryStoryListPage()) startLiveRefresh();
       else stopLiveRefresh();
     }
@@ -428,12 +562,39 @@
   }
 
   function shortenProjectLinks(root = document) {
-    $$('a[href]:not([data-entry-llnk-project-link])', root).slice(0, 200).forEach((link) => {
+    if (!state.shortenProjectLinksEnabled) {
+      $$('a[href]', root).slice(0, 200).forEach((link) => {
+        const url = safeHttpUrl(link.getAttribute("href"));
+        const wasShortened = link.dataset.entryLlnkProjectLink === "1" || text(link.textContent).trim() === "[작품 링크]";
+        if (!isProjectUrl(url) || !wasShortened) return;
+        const original = text(link.dataset.entryLlnkProjectOriginalText).trim();
+        link.textContent = original && original !== "[작품 링크]" ? original : (url?.href || link.textContent);
+        link.classList.remove("entry-chat-short-project-link", "entry-chat-md-link");
+        if (link.dataset.entryLlnkProjectHadTarget === "1") link.setAttribute("target", link.dataset.entryLlnkProjectOriginalTarget || "");
+        else link.removeAttribute("target");
+        if (link.dataset.entryLlnkProjectHadRel === "1") link.setAttribute("rel", link.dataset.entryLlnkProjectOriginalRel || "");
+        else link.removeAttribute("rel");
+      });
+      return;
+    }
+    $$('a[href]', root).slice(0, 200).forEach((link) => {
       const url = safeHttpUrl(link.getAttribute("href"));
       if (!isProjectUrl(url) || link.querySelector("img, video, canvas, button")) return;
+      if (link.dataset.entryLlnkProjectLink === "1") {
+        link.textContent = "[작품 링크]";
+        link.classList.add("entry-chat-short-project-link", "entry-chat-md-link");
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        return;
+      }
       const label = text(link.textContent).trim();
-      if (!/(?:https?:\/\/)?(?:www\.)?playentry\.org\/project\//i.test(label) && !/^\/project\//i.test(label)) return;
+      if (label !== "[작품 링크]" && !/(?:https?:\/\/)?(?:www\.)?playentry\.org\/project\//i.test(label) && !/^\/project\//i.test(label)) return;
       link.dataset.entryLlnkProjectLink = "1";
+      link.dataset.entryLlnkProjectOriginalText = label === "[작품 링크]" ? url.href : (link.textContent || "");
+      link.dataset.entryLlnkProjectHadTarget = link.hasAttribute("target") ? "1" : "0";
+      link.dataset.entryLlnkProjectOriginalTarget = link.getAttribute("target") || "";
+      link.dataset.entryLlnkProjectHadRel = link.hasAttribute("rel") ? "1" : "0";
+      link.dataset.entryLlnkProjectOriginalRel = link.getAttribute("rel") || "";
       link.textContent = "[작품 링크]";
       link.classList.add("entry-chat-short-project-link", "entry-chat-md-link");
       link.target = "_blank";
@@ -441,21 +602,380 @@
     });
   }
 
-  function applyPromotionFilter(post) {
-    if (!isEntryStoryListPage()) {
-      post?.classList?.remove("entry-chat-entry-story-link-filtered");
-      return;
+  function normalizeStoryFilters(value, legacyHidePromotions = true) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return { ...DEFAULT_STORY_FILTERS, projectLinks: legacyHidePromotions !== false };
     }
-    const body = $(BODY_SELECTOR, post) || post;
-    const value = `${text(body.dataset.entryLlnkOriginal || body.textContent)} ${$$('a[href]', body).map((link) => link.href).join(" ")}`;
-    const shouldHide = state.hidePromotions && /(?:playentry\.org\/project(?:\/|\b)|naver\.me\/)/i.test(value);
-    post.classList.toggle("entry-chat-entry-story-link-filtered", shouldHide);
-    $(":scope > .entry-chat-link-filter-placeholder", post)?.remove();
+    const filters = Object.fromEntries(STORY_FILTER_OPTIONS.map(({ key }) => [key, value[key] === true]));
+    if (filters.allLinks) {
+      filters.entryLinks = true;
+      filters.projectLinks = true;
+      filters.externalLinks = true;
+      filters.naverShortLinks = true;
+    } else if (filters.entryLinks) {
+      filters.projectLinks = true;
+    } else if (filters.externalLinks) {
+      filters.naverShortLinks = true;
+    }
+    return filters;
   }
 
-  function ensurePromotionToggle() {
+  function hasActiveStoryFilters() {
+    return STORY_FILTER_OPTIONS.some(({ key }) => state.storyFilters[key]);
+  }
+
+  function normalizePageSettings(value) {
+    const settings = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+    return Object.fromEntries(Object.entries(DEFAULT_PAGE_SETTINGS).map(([key, defaultValue]) => [
+      key,
+      typeof settings[key] === "boolean" ? settings[key] : defaultValue,
+    ]));
+  }
+
+  function storyFilterUrlFromAnchor(link) {
+    const url = safeHttpUrl(link?.getAttribute?.("href"));
+    if (!url) return null;
+    if ((url.hostname === "playentry.org" || url.hostname.endsWith(".playentry.org")) && url.pathname === "/redirect") {
+      return safeHttpUrl(url.searchParams.get("external")) || url;
+    }
+    return url;
+  }
+
+  function storyFilterContent(post) {
+    const body = $(BODY_SELECTOR, post) || $("[data-entry-chat-live-body='1']", post) || post;
+    const urls = $$('a[href]', body)
+      .filter((link) => !(
+        link.matches(".entry-chat-image-link")
+        || link.closest(".entry-chat-image-card")
+        || link.querySelector("img, .entry-chat-bloupla-image-host")
+      ))
+      .map(storyFilterUrlFromAnchor)
+      .filter(Boolean);
+    const hasProjectLink = urls.some(isProjectUrl);
+    const hasEntryLink = urls.some((url) => url.hostname === "playentry.org" || url.hostname.endsWith(".playentry.org"));
+    const hasExternalLink = urls.some((url) => url.hostname !== "playentry.org" && !url.hostname.endsWith(".playentry.org"));
+    const hasNaverShortLink = urls.some((url) => url.hostname === "naver.me" || url.hostname.endsWith(".naver.me"));
+    const hasImage = Boolean(
+      $(".entry-chat-image-card", body)
+      || $("[data-entry-chat-live-media='1']:not(.is-native-reaction) img", post)
+      || $(".entry-chat-live-entry-story-media:not(.is-native-reaction) img", post)
+    );
+    const hasEntryEmoticon = Boolean(
+      $("[data-entry-chat-live-media='1'].is-native-reaction img", post)
+      || $(".entry-chat-live-entry-story-media.is-native-reaction img", post)
+      || $("img[alt='sticker']", post)
+    );
+    return {
+      hasProjectLink,
+      hasEntryLink,
+      hasExternalLink,
+      hasNaverShortLink,
+      hasLink: urls.length > 0,
+      hasImage,
+      hasEntryEmoticon,
+    };
+  }
+
+  function applyStoryFilters(post) {
     if (!isEntryStoryListPage()) {
+      post?.classList?.remove("entry-chat-entry-story-link-filtered");
+      return false;
+    }
+    const content = storyFilterContent(post);
+    const shouldHide = Boolean(
+      (state.storyFilters.projectLinks && content.hasProjectLink)
+      || (state.storyFilters.entryLinks && content.hasEntryLink)
+      || (state.storyFilters.externalLinks && content.hasExternalLink)
+      || (state.storyFilters.naverShortLinks && content.hasNaverShortLink)
+      || (state.storyFilters.allLinks && content.hasLink)
+      || (state.storyFilters.images && content.hasImage)
+      || (state.storyFilters.entryEmoticons && content.hasEntryEmoticon)
+    );
+    post.classList.toggle("entry-chat-entry-story-link-filtered", shouldHide);
+    $(":scope > .entry-chat-link-filter-placeholder", post)?.remove();
+    return shouldHide;
+  }
+
+  function isStoryPostFiltered(post) {
+    return post?.classList?.contains("entry-chat-entry-story-link-filtered") === true;
+  }
+
+  async function saveStoryFilters() {
+    const saved = await Ringcl.storageGet(["entryLlnkSettings"]).catch(() => ({}));
+    await Ringcl.storageSet({
+      entryLlnkSettings: {
+        ...(saved.entryLlnkSettings || {}),
+        storyFilters: { ...state.storyFilters },
+        hidePromotions: state.storyFilters.projectLinks,
+      },
+    }).catch(() => {});
+  }
+
+  function storyFilterDescendants(key) {
+    const descendants = [];
+    const visit = (parentKey) => {
+      const children = STORY_FILTER_OPTION_MAP.get(parentKey)?.children || [];
+      children.forEach((childKey) => {
+        descendants.push(childKey);
+        visit(childKey);
+      });
+    };
+    visit(key);
+    return descendants;
+  }
+
+  function storyFilterAncestors(key) {
+    const ancestors = [];
+    let parent = STORY_FILTER_OPTION_MAP.get(key)?.parent || "";
+    while (parent) {
+      ancestors.push(parent);
+      parent = STORY_FILTER_OPTION_MAP.get(parent)?.parent || "";
+    }
+    return ancestors;
+  }
+
+  function setStoryFilterEnabled(key, enabled) {
+    state.storyFilters[key] = enabled;
+    storyFilterDescendants(key).forEach((childKey) => {
+      state.storyFilters[childKey] = enabled;
+    });
+    if (!enabled) {
+      storyFilterAncestors(key).forEach((parentKey) => {
+        state.storyFilters[parentKey] = false;
+      });
+    }
+  }
+
+  function setStoryToolbarPanelOpen(panel, button, open) {
+    panel.hidden = !open;
+    panel.classList.toggle("is-open", open);
+    button.setAttribute("aria-expanded", open ? "true" : "false");
+  }
+
+  function closeStoryToolbarPanels(exceptButton = null) {
+    [
+      ["[data-entry-llnk-story-filter-panel='1']", "[data-entry-llnk-link-filter='1']"],
+      ["[data-entry-llnk-story-settings-panel='1']", "[data-entry-llnk-story-settings='1']"],
+    ].forEach(([panelSelector, buttonSelector]) => {
+      const panel = $(panelSelector);
+      const button = $(buttonSelector);
+      if (!panel || !button || button === exceptButton || panel.hidden) return;
+      setStoryToolbarPanelOpen(panel, button, false);
+    });
+  }
+
+  function bindStoryFilterMenuEvents() {
+    if (state.storyFilterEventsBound) return;
+    state.storyFilterEventsBound = true;
+    document.addEventListener("pointerdown", (event) => {
+      const insideToolbarMenu = event.target.closest?.(
+        "[data-entry-llnk-story-filter-panel='1'], [data-entry-llnk-story-settings-panel='1'], "
+        + "[data-entry-llnk-link-filter='1'], [data-entry-llnk-story-settings='1']",
+      );
+      if (!insideToolbarMenu) closeStoryToolbarPanels();
+    }, true);
+    document.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape") return;
+      const openButton = [
+        $("[data-entry-llnk-link-filter='1'][aria-expanded='true']"),
+        $("[data-entry-llnk-story-settings='1'][aria-expanded='true']"),
+      ].find(Boolean);
+      if (!openButton) return;
+      closeStoryToolbarPanels();
+      openButton.focus();
+    });
+  }
+
+  function syncNativeStorySortOpenState() {
+    if (!isEntryStoryListPage()) return;
+    const toolbar = $$(".css-wa4axc.e1lgujxn8, [class~='css-wa4axc'][class~='e1lgujxn8']")
+      .find((element) => isVisible(element) && !element.closest(".entry-chat-root"));
+    if (!toolbar) return;
+    $$('[class~="elhpwdj0"]', toolbar).forEach((wrapper) => {
+      const button = $(':scope > [class~="elhpwdj1"]', wrapper);
+      const panel = $(':scope > [class~="e7o4zqs0"]', wrapper);
+      if (!button || !panel) return;
+      const panelStyle = window.getComputedStyle(panel);
+      const open = !panel.hidden && panelStyle.display !== "none" && panelStyle.visibility !== "hidden";
+      wrapper.classList.toggle("entry-llnk-native-sort-open", open);
+      button.setAttribute("aria-expanded", open ? "true" : "false");
+    });
+  }
+
+  function bindNativeStorySortEvents() {
+    if (state.storyNativeSortEventsBound) return;
+    state.storyNativeSortEventsBound = true;
+    const scheduleSync = () => {
+      window.requestAnimationFrame(() => {
+        syncNativeStorySortOpenState();
+        window.setTimeout(syncNativeStorySortOpenState, 40);
+      });
+    };
+    document.addEventListener("click", scheduleSync, true);
+    document.addEventListener("keyup", (event) => {
+      if (event.key === "Enter" || event.key === " " || event.key === "Escape") scheduleSync();
+    }, true);
+  }
+
+  function bindReplyFoldScrollStabilizer() {
+    if (state.replyFoldEventsBound) return;
+    state.replyFoldEventsBound = true;
+    document.addEventListener("click", (event) => {
+      const button = event.target.closest?.('a[class~="e1qasnlc3"]');
+      const post = button?.closest?.('li[class~="eqmdslz0"]');
+      if (!button || !post || !isVisible(button)) return;
+      const anchorTop = post.getBoundingClientRect().top;
+      const correct = () => {
+        if (!post.isConnected) return;
+        const delta = post.getBoundingClientRect().top - anchorTop;
+        if (Math.abs(delta) > 0.5) window.scrollBy(0, delta);
+      };
+      window.requestAnimationFrame(() => {
+        correct();
+        window.requestAnimationFrame(correct);
+      });
+      [80, 180, 320].forEach((delay) => window.setTimeout(correct, delay));
+    }, true);
+  }
+
+  function createStoryToolbarButton(className, dataKey, label, iconName) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `entry-chat-story-toolbar-toggle ${className}`;
+    button.dataset[dataKey] = "1";
+    button.dataset.entryLlnkOwned = "1";
+    button.setAttribute("aria-haspopup", "dialog");
+    button.setAttribute("aria-expanded", "false");
+
+    const icon = document.createElement("span");
+    icon.className = "material-symbols-outlined entry-chat-story-toolbar-icon";
+    icon.setAttribute("aria-hidden", "true");
+    icon.textContent = iconName;
+    const textNode = document.createElement("span");
+    textNode.className = "entry-chat-story-toolbar-label";
+    textNode.textContent = label;
+    const caret = document.createElement("span");
+    caret.className = "entry-chat-story-toolbar-caret";
+    caret.setAttribute("aria-hidden", "true");
+    button.append(icon, textNode, caret);
+    return button;
+  }
+
+  function createStoryFilterPanel() {
+    const panel = document.createElement("div");
+    panel.className = "entry-chat-story-filter-panel";
+    panel.dataset.entryLlnkStoryFilterPanel = "1";
+    panel.dataset.entryLlnkOwned = "1";
+    panel.hidden = true;
+    panel.setAttribute("role", "dialog");
+    panel.setAttribute("aria-label", "게시글 필터");
+
+    const heading = document.createElement("div");
+    heading.className = "entry-chat-story-filter-heading";
+    const title = document.createElement("strong");
+    title.textContent = "게시글 필터";
+    heading.appendChild(title);
+    panel.appendChild(heading);
+
+    STORY_FILTER_OPTIONS.forEach(({ key, label, depth = 0, startsSection = false }) => {
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "entry-chat-story-filter-option";
+      row.classList.toggle("starts-section", startsSection);
+      row.classList.add(`is-depth-${Math.max(0, Math.min(2, depth))}`);
+      row.dataset.storyFilterKey = key;
+      row.dataset.storyFilterDepth = String(depth);
+      row.setAttribute("role", "switch");
+      const copy = document.createElement("span");
+      copy.className = "entry-chat-story-filter-copy";
+      const name = document.createElement("strong");
+      name.textContent = label;
+      copy.appendChild(name);
+      const control = document.createElement("span");
+      control.className = "entry-chat-story-filter-switch";
+      control.setAttribute("aria-hidden", "true");
+      control.appendChild(document.createElement("i"));
+      row.append(copy, control);
+      row.addEventListener("click", async () => {
+        setStoryFilterEnabled(key, !state.storyFilters[key]);
+        syncStoryFilterMenu();
+        $$(POST_SELECTOR).forEach(applyStoryFilters);
+        await saveStoryFilters();
+      });
+      panel.appendChild(row);
+    });
+    return panel;
+  }
+
+  async function saveStorySetting(key, enabled) {
+    state.pageSettings[key] = enabled;
+    const saved = await Ringcl.storageGet(["entryLlnkSettings"]).catch(() => ({}));
+    await Ringcl.storageSet({
+      entryLlnkSettings: {
+        ...(saved.entryLlnkSettings || {}),
+        [key]: enabled,
+      },
+    }).catch(() => {});
+  }
+
+  function createStorySettingsPanel() {
+    const panel = document.createElement("div");
+    panel.className = "entry-chat-story-filter-panel entry-chat-story-settings-panel";
+    panel.dataset.entryLlnkStorySettingsPanel = "1";
+    panel.dataset.entryLlnkOwned = "1";
+    panel.hidden = true;
+    panel.setAttribute("role", "dialog");
+    panel.setAttribute("aria-label", "링클 설정");
+
+    const heading = document.createElement("div");
+    heading.className = "entry-chat-story-filter-heading";
+    const title = document.createElement("strong");
+    title.textContent = "설정";
+    heading.appendChild(title);
+    panel.appendChild(heading);
+
+    STORY_SETTING_OPTIONS.forEach(({ key, label, icon }) => {
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "entry-chat-story-filter-option entry-chat-story-setting-option";
+      row.dataset.storySettingKey = key;
+      row.setAttribute("role", "switch");
+      const rowIcon = document.createElement("span");
+      rowIcon.className = "material-symbols-outlined entry-chat-story-setting-icon";
+      rowIcon.setAttribute("aria-hidden", "true");
+      rowIcon.textContent = icon;
+      const copy = document.createElement("span");
+      copy.className = "entry-chat-story-filter-copy";
+      const name = document.createElement("strong");
+      name.textContent = label;
+      copy.appendChild(name);
+      const control = document.createElement("span");
+      control.className = "entry-chat-story-filter-switch";
+      control.setAttribute("aria-hidden", "true");
+      control.appendChild(document.createElement("i"));
+      row.append(rowIcon, copy, control);
+      row.addEventListener("click", async () => {
+        const enabled = state.pageSettings[key] !== true;
+        state.pageSettings[key] = enabled;
+        if (key === "shortenProjectLinks") {
+          state.shortenProjectLinksEnabled = enabled;
+          shortenProjectLinks(document);
+        }
+        syncStorySettingsMenu();
+        await saveStorySetting(key, enabled);
+      });
+      panel.appendChild(row);
+    });
+    return panel;
+  }
+
+  function ensureStoryFilterMenu() {
+    syncLiveStoryToolbarScope();
+    if (!isLiveEntryStoryPage()) {
       $("[data-entry-llnk-link-filter='1']")?.remove();
+      $("[data-entry-llnk-story-filter-panel='1']")?.remove();
+      $("[data-entry-llnk-story-settings='1']")?.remove();
+      $("[data-entry-llnk-story-settings-panel='1']")?.remove();
       return;
     }
     const container = $$(".css-wa4axc.e1lgujxn8, [class~='css-wa4axc'][class~='e1lgujxn8']")
@@ -463,34 +983,76 @@
     if (!container) return;
     let button = $("[data-entry-llnk-link-filter='1']");
     if (!button) {
-      button = document.createElement("button");
-      button.type = "button";
-      button.className = "entry-chat-story-link-filter-toggle";
-      button.dataset.entryLlnkLinkFilter = "1";
-      button.dataset.entryLlnkOwned = "1";
-      button.addEventListener("click", async () => {
-        state.hidePromotions = !state.hidePromotions;
-        const saved = await Ringcl.storageGet(["entryLlnkSettings"]).catch(() => ({}));
-        await Ringcl.storageSet({
-          entryLlnkSettings: {
-            ...(saved.entryLlnkSettings || {}),
-            hidePromotions: state.hidePromotions,
-          },
-        }).catch(() => {});
-        syncPromotionToggle(button);
-        $$(POST_SELECTOR).forEach(applyPromotionFilter);
+      button = createStoryToolbarButton("entry-chat-story-link-filter-toggle", "entryLlnkLinkFilter", "필터", "filter_alt");
+      button.addEventListener("click", () => {
+        const panel = $("[data-entry-llnk-story-filter-panel='1']");
+        if (!panel) return;
+        const open = panel.hidden;
+        closeStoryToolbarPanels(button);
+        setStoryToolbarPanelOpen(panel, button, open);
       });
     }
     if (button.parentElement !== container || button !== container.firstElementChild) container.insertBefore(button, container.firstElementChild);
-    syncPromotionToggle(button);
+    let settingsButton = $("[data-entry-llnk-story-settings='1']");
+    if (!settingsButton) {
+      settingsButton = createStoryToolbarButton("entry-chat-story-settings-toggle", "entryLlnkStorySettings", "설정", "settings");
+      settingsButton.addEventListener("click", () => {
+        const panel = $("[data-entry-llnk-story-settings-panel='1']");
+        if (!panel) return;
+        const open = panel.hidden;
+        closeStoryToolbarPanels(settingsButton);
+        setStoryToolbarPanelOpen(panel, settingsButton, open);
+      });
+    }
+    if (settingsButton.parentElement !== container || settingsButton.previousElementSibling !== button) {
+      container.insertBefore(settingsButton, button.nextSibling);
+    }
+    let panel = $("[data-entry-llnk-story-filter-panel='1']");
+    if (!panel) panel = createStoryFilterPanel();
+    if (panel.parentElement !== container) container.appendChild(panel);
+    let settingsPanel = $("[data-entry-llnk-story-settings-panel='1']");
+    if (!settingsPanel) settingsPanel = createStorySettingsPanel();
+    if (settingsPanel.parentElement !== container) container.appendChild(settingsPanel);
+    panel.style.left = `${button.offsetLeft}px`;
+    settingsPanel.style.left = `${settingsButton.offsetLeft}px`;
+    bindStoryFilterMenuEvents();
+    bindNativeStorySortEvents();
+    syncNativeStorySortOpenState();
+    syncStoryFilterMenu(button, panel);
+    syncStorySettingsMenu(settingsButton, settingsPanel);
   }
 
-  function syncPromotionToggle(button = $("[data-entry-llnk-link-filter='1']")) {
+  function syncStoryFilterMenu(
+    button = $("[data-entry-llnk-link-filter='1']"),
+    panel = $("[data-entry-llnk-story-filter-panel='1']"),
+  ) {
     if (!button) return;
-    button.classList.toggle("is-active", state.hidePromotions);
-    button.setAttribute("aria-pressed", state.hidePromotions ? "true" : "false");
-    button.title = state.hidePromotions ? "홍보 가리는 중" : "홍보 가리기";
-    button.textContent = state.hidePromotions ? "홍보 가리는 중" : "홍보 가리기";
+    const active = hasActiveStoryFilters();
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-pressed", active ? "true" : "false");
+    button.setAttribute("aria-expanded", panel && !panel.hidden ? "true" : "false");
+    button.title = active ? "필터 사용 중" : "게시글 필터";
+    if (!panel) return;
+    $$('[data-story-filter-key]', panel).forEach((row) => {
+      const enabled = state.storyFilters[row.dataset.storyFilterKey] === true;
+      row.classList.toggle("is-active", enabled);
+      row.setAttribute("aria-checked", enabled ? "true" : "false");
+    });
+  }
+
+  function syncStorySettingsMenu(
+    button = $("[data-entry-llnk-story-settings='1']"),
+    panel = $("[data-entry-llnk-story-settings-panel='1']"),
+  ) {
+    if (!button) return;
+    button.setAttribute("aria-expanded", panel && !panel.hidden ? "true" : "false");
+    button.title = "링클 설정";
+    if (!panel) return;
+    $$('[data-story-setting-key]', panel).forEach((row) => {
+      const enabled = state.pageSettings[row.dataset.storySettingKey] === true;
+      row.classList.toggle("is-active", enabled);
+      row.setAttribute("aria-checked", enabled ? "true" : "false");
+    });
   }
 
   function getList() {
@@ -563,6 +1125,19 @@
     $$(".entry-chat-entry-story-scroll-top[data-entry-llnk-owned='1']").forEach((button) => button.remove());
   }
 
+  function isNewestEntryStoryPostVisible() {
+    const firstPost = getLiveRows(getList())[0];
+    if (!firstPost) return window.scrollY <= 80;
+    const rect = firstPost.getBoundingClientRect();
+    return rect.bottom > 0 && rect.top < window.innerHeight;
+  }
+
+  function updateNewPostIndicator(button = $(".entry-chat-entry-story-scroll-top[data-entry-llnk-owned='1']")) {
+    if (!button) return;
+    if (isNewestEntryStoryPostVisible()) button.classList.remove("has-new-post");
+    else button.classList.add("has-new-post");
+  }
+
   function ensureScrollTopButton() {
     if (!isEntryStoryListPage()) {
       removeScrollTopButton();
@@ -602,6 +1177,9 @@
         const gap = window.innerWidth <= 720 ? 8 : 14;
         const left = Math.max(12, Math.min(window.innerWidth - width - 12, rect.right + gap));
         button.style.left = `${Math.round(left)}px`;
+      }
+      if (button.classList.contains("has-new-post") && isNewestEntryStoryPostVisible()) {
+        button.classList.remove("has-new-post");
       }
       button.classList.toggle("is-visible", window.scrollY > Math.max(520, window.innerHeight * 0.7));
     }
@@ -645,7 +1223,7 @@
       state.blouplaFrames.delete(token);
       const card = entry.host.closest(".entry-chat-image-card");
       if (payload.error) {
-        if (card) {
+        if (card && !showImageFallbackLink(card)) {
           card.textContent = "이미지를 불러오지 못했습니다.";
           card.classList.add("is-error");
         }
@@ -720,7 +1298,13 @@
         wrapper.className = "entry-chat-image-spoiler";
         const link = document.createElement("a");
         link.className = "entry-chat-image-link";
-        link.href = imageUrl;
+        const fallbackUrl = safeHttpUrl(card.dataset.entryLlnkFallbackUrl);
+        const llnkViewerUrl = card.dataset.entryLlnkSource === "llnk"
+          && fallbackUrl?.protocol === "https:"
+          && fallbackUrl.hostname === "llnk.kr"
+          ? fallbackUrl.href
+          : "";
+        link.href = llnkViewerUrl || imageUrl;
         link.target = "_blank";
         link.rel = "noopener noreferrer";
         link.addEventListener("click", (event) => {
@@ -734,6 +1318,7 @@
           image.alt = "이미지";
           image.loading = "lazy";
           image.decoding = "async";
+          image.addEventListener("error", () => showImageFallbackLink(card), { once: true });
           link.appendChild(image);
         }
         const cover = document.createElement("button");
@@ -754,8 +1339,10 @@
         card.dataset.imageLoaded = "1";
         card.classList.toggle("has-spoiler", state.imageSpoilerEnabled);
       } catch (error) {
-        card.textContent = error.message || "이미지를 불러오지 못했습니다.";
-        card.classList.add("is-error");
+        if (!showImageFallbackLink(card)) {
+          card.textContent = error.message || "이미지를 불러오지 못했습니다.";
+          card.classList.add("is-error");
+        }
       }
       return;
     }
@@ -858,6 +1445,7 @@
       updateCounter(writer);
     };
     writer.addEventListener("input", (event) => {
+      if (suppressPendingDraftInWriter(writer)) return;
       update(event);
       if (writer.dataset.entryLlnkDraftAnimating !== "1") scheduleWriterPreview();
     });
@@ -880,13 +1468,12 @@
       const submittedValue = text(writer?.value);
       saveDraft(writer);
       if (submittedValue.trim()) {
-        state.draftSubmittedValue = submittedValue;
-        state.draftSubmitPendingUntil = Date.now() + 35000;
         rememberDraftSubmitPending(submittedValue);
+        discardStoredDraft();
         startDraftFailureWatch();
+        startPendingWriterSuppression(writer);
       }
       prepareWriterForSubmit(writer);
-      window.setTimeout(() => suppressPendingDraftInWriter(writer), 180);
       window.setTimeout(renderWriterPreview, 120);
     }, true);
   }
@@ -901,11 +1488,12 @@
       const value = text(pending?.value);
       const ownerEntryUserId = text(pending?.ownerEntryUserId).trim();
       const expiresAt = Number(pending?.expiresAt || 0);
+      const submittedAt = Number(pending?.submittedAt || expiresAt - 35000 || 0);
       if (!value.trim() || !expiresAt || expiresAt <= Date.now()) {
         sessionStorage.removeItem(DRAFT_SUBMIT_SESSION_KEY);
         return null;
       }
-      return { value, ownerEntryUserId, expiresAt };
+      return { value, ownerEntryUserId, expiresAt, submittedAt };
     } catch (_) {
       try { sessionStorage.removeItem(DRAFT_SUBMIT_SESSION_KEY); } catch (_) {}
       return null;
@@ -915,8 +1503,11 @@
   function clearDraftSubmitPending() {
     state.draftSubmitPendingUntil = 0;
     state.draftSubmittedValue = "";
+    state.draftSubmittedAt = 0;
     window.clearInterval(state.draftFailureWatchTimer);
     state.draftFailureWatchTimer = 0;
+    window.clearTimeout(state.draftSubmitClearTimer);
+    state.draftSubmitClearTimer = 0;
     try { sessionStorage.removeItem(DRAFT_SUBMIT_SESSION_KEY); } catch (_) {}
   }
 
@@ -925,6 +1516,7 @@
     if (!pending) {
       state.draftSubmitPendingUntil = 0;
       state.draftSubmittedValue = "";
+      state.draftSubmittedAt = 0;
       return false;
     }
     const owner = text(ownerEntryUserId).trim();
@@ -934,19 +1526,23 @@
     }
     state.draftSubmitPendingUntil = pending.expiresAt;
     state.draftSubmittedValue = pending.value;
+    state.draftSubmittedAt = pending.submittedAt;
     return true;
   }
 
   function rememberDraftSubmitPending(value) {
     const submittedValue = text(value);
     if (!submittedValue.trim()) return;
+    const submittedAt = Date.now();
     const expiresAt = Date.now() + 35000;
     state.draftSubmitPendingUntil = expiresAt;
     state.draftSubmittedValue = submittedValue;
+    state.draftSubmittedAt = submittedAt;
     try {
       sessionStorage.setItem(DRAFT_SUBMIT_SESSION_KEY, JSON.stringify({
         value: submittedValue,
         ownerEntryUserId: draftOwnerId(),
+        submittedAt,
         expiresAt,
       }));
     } catch (_) {}
@@ -965,6 +1561,18 @@
     updateCounter(writer);
     scheduleWriterPreview(0);
     return true;
+  }
+
+  function startPendingWriterSuppression(writer = getWriter()) {
+    window.clearTimeout(state.draftSubmitClearTimer);
+    state.draftSubmitClearTimer = 0;
+    const suppress = () => {
+      state.draftSubmitClearTimer = 0;
+      if (Date.now() >= state.draftSubmitPendingUntil || !text(state.draftSubmittedValue).trim()) return;
+      suppressPendingDraftInWriter(writer?.isConnected ? writer : getWriter());
+      state.draftSubmitClearTimer = window.setTimeout(suppress, 250);
+    };
+    state.draftSubmitClearTimer = window.setTimeout(suppress, 180);
   }
 
   function resetDraftRuntimeForAccount(nextOwnerEntryUserId = "") {
@@ -1020,6 +1628,12 @@
   function saveDraft(writer, options = {}) {
     if (!state.draftEnabled) return;
     const value = text(writer?.value);
+    const pendingValue = text(state.draftSubmittedValue);
+    if (
+      Date.now() < state.draftSubmitPendingUntil
+      && pendingValue.trim()
+      && encodedPostValue(value) === encodedPostValue(pendingValue)
+    ) return;
     if (!value.trim()) {
       if (options.allowClear) clearDraft();
       return;
@@ -1086,7 +1700,7 @@
     return { value: state.draftValue, savedAt: state.draftSavedAt };
   }
 
-  function clearDraft() {
+  function discardStoredDraft() {
     window.clearTimeout(state.draftPersistTimer);
     state.draftPersistTimer = 0;
     state.draftValue = "";
@@ -1098,6 +1712,10 @@
       sessionStorage.removeItem("entryLlnkEntryStoryDraftSessionOwner");
     } catch (_) {}
     Ringcl.storageRemove([DRAFT_STORAGE_KEY]).catch(() => {});
+  }
+
+  function clearDraft() {
+    discardStoredDraft();
     clearDraftSubmitPending();
     clearDraftRestoreEffects();
   }
@@ -1324,6 +1942,9 @@
     ].join(" ");
     const isChallengeContainer = /^(IFRAME|OBJECT|EMBED)$/.test(element.tagName)
       || element.matches?.('[role="dialog"], [aria-modal="true"]');
+    const isKnownFailureContainer = isChallengeContainer
+      || element.matches?.(".css-ye9ri9.e10kbqtd0, [class~='css-ye9ri9'][class~='e10kbqtd0']");
+    if (!isKnownFailureContainer) return false;
     return SUBMIT_FAILURE_TEXT_RE.test(text(element.textContent))
       || (isChallengeContainer && ROBOT_CHALLENGE_ATTRIBUTE_RE.test(attributes));
   }
@@ -1336,9 +1957,10 @@
   }
 
   function restoreDraftForSubmitFailure() {
-    if (!state.draftSubmittedValue.trim() && !readDraft()?.value?.trim()) return false;
+    const failedValue = text(state.draftSubmittedValue || readDraft()?.value);
+    if (!failedValue.trim()) return false;
     clearDraftSubmitPending();
-    window.setTimeout(restoreDraftAfterFailure, 120);
+    window.setTimeout(() => restoreDraftAfterFailure(failedValue), 120);
     return true;
   }
 
@@ -1368,8 +1990,6 @@
       window.clearTimeout(restoreTimer);
       restoreTimer = window.setTimeout(() => restoreDraftOnPageLoad().catch(() => {}), 60);
     };
-    const hasDialog = (element) => element.matches?.('[role="dialog"], .css-ye9ri9.e10kbqtd0, [class~="css-ye9ri9"][class~="e10kbqtd0"]')
-      || Boolean($('[role="dialog"], .css-ye9ri9.e10kbqtd0, [class~="css-ye9ri9"][class~="e10kbqtd0"]', element));
     state.draftObserver = new MutationObserver((mutations) => {
       for (const mutation of mutations) {
         const changedElements = [];
@@ -1383,7 +2003,7 @@
           if (node.matches?.(WRITER_SELECTOR) || node.querySelector?.(WRITER_SELECTOR)) scheduleRestore();
           const knownFailure = isSubmitFailureElement(node)
             || Boolean(findSubmitFailureElement(node));
-          if (!knownFailure && !(Date.now() < state.draftSubmitPendingUntil && hasDialog(node))) continue;
+          if (!knownFailure) continue;
           restoreDraftForSubmitFailure();
           return;
         }
@@ -1397,14 +2017,15 @@
     window.setTimeout(scheduleRestore, 180);
   }
 
-  function restoreDraftAfterFailure() {
+  function restoreDraftAfterFailure(fallbackValue = "") {
     clearDraftSubmitPending();
     const draft = readDraft();
     const writer = getWriter();
-    if (!draft || !writer) return;
+    const value = text(draft?.value || fallbackValue);
+    if (!value.trim() || !writer) return;
     const current = text(writer.value);
-    if (!current.trim() || current.length < draft.value.length) {
-      restoreDraftIntoWriter(writer, draft.value, { announce: true });
+    if (!current.trim() || current.length < value.length) {
+      restoreDraftIntoWriter(writer, value, { announce: true });
     }
   }
 
@@ -1412,7 +2033,7 @@
     const draftValue = text(value);
     clearDraftRestoreEffects();
     if (!writer?.isConnected || !draftValue) return;
-    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+    if (!state.spaceshipMotionEnabled || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
       setDraftRestoreValue(writer, draftValue, true);
       return;
     }
@@ -1480,8 +2101,9 @@
         renderedCount = nextCount;
         setDraftRestoreProgress(writer, characters.slice(0, renderedCount).join(""));
       }
-      const writingProgress = characters.length ? renderedCount / characters.length : 1;
-      const pose = draftFlightPose(writer, progress, timing, writingProgress);
+      const initialProgress = characters.length ? initialCount / characters.length : 1;
+      const motionWritingProgress = Math.max(initialProgress, typingProgress);
+      const pose = draftFlightPose(writer, progress, timing, motionWritingProgress);
       flight.style.opacity = String(pose.opacity);
       flight.style.transform = `translate3d(${pose.x}px, ${pose.y}px, 0) perspective(680px) rotateY(${pose.yaw}deg) rotateZ(${pose.rotate}deg) scale(${pose.scale})`;
       ship.style.setProperty("--entry-chat-draft-impact-opacity", String(pose.impact * 0.82));
@@ -1496,12 +2118,18 @@
     animationFrame = window.requestAnimationFrame(renderFrame);
   }
 
-  function clearDraftRestoreEffects() {
+  function clearDraftRestoreEffects(complete = false) {
     const cleanup = state.draftRestoreCleanup;
     state.draftRestoreCleanup = null;
-    cleanup?.(false);
+    cleanup?.(complete);
     $$(".entry-chat-draft-flight[data-entry-llnk-owned='1'], .entry-chat-draft-restore-panel[data-entry-llnk-owned='1'], .entry-chat-draft-restore-particles[data-entry-llnk-owned='1'], .entry-chat-draft-restore-message[data-entry-llnk-owned='1']").forEach((element) => element.remove());
     $$(".entry-chat-draft-restore-effect-host").forEach((element) => element.classList.remove("entry-chat-draft-restore-effect-host"));
+  }
+
+  function clearSpaceshipMotionEffects() {
+    clearDraftRestoreEffects(true);
+    [...state.liveArrivalCleanups].forEach((cleanup) => cleanup());
+    state.nativeArrivalPending = 0;
   }
 
   function encodePostLineBreaks(value) {
@@ -1621,6 +2249,54 @@
       });
       return candidates.map(normalizeEntryImageUrl).find(Boolean) || "";
     });
+  }
+
+  function scanImageUploadError(doc) {
+    return walkFrameDocuments(doc, (target) => {
+      const nodes = $$('[role="alert"], [role="dialog"], [aria-modal="true"], [aria-live="assertive"], [aria-live="polite"], .css-ye9ri9.e10kbqtd0, [class*="error"], [class*="Error"], [class*="toast"], [class*="Toast"]', target);
+      for (const node of nodes) {
+        const style = target.defaultView?.getComputedStyle(node);
+        if (style?.display === "none" || style?.visibility === "hidden") continue;
+        const message = text(node.textContent).replace(/\s+/g, " ").trim();
+        if (!message) continue;
+        const uploadFailure = /요청을\s*처리하지\s*못했습니다|(?:업로드|파일|이미지).{0,60}(?:실패|오류|초과|불가|지원하지|처리하지|너무\s*(?:크|큽)|제한)|(?:실패|오류|초과|불가|지원하지|처리하지).{0,60}(?:업로드|파일|이미지)|(?:최대|제한).{0,40}(?:MB|KB|GB|용량|크기)/i;
+        if (uploadFailure.test(message)) return message.slice(0, 180);
+      }
+      const invalidInput = $$('input[type="file"]', target).find((input) => input.validity && !input.validity.valid);
+      return text(invalidInput?.validationMessage).replace(/\s+/g, " ").trim().slice(0, 180);
+    });
+  }
+
+  function formatImageUploadError() {
+    return "업로드할 수 없는 파일입니다.";
+  }
+
+  function showImageUploadError(message) {
+    $(".entry-chat-image-upload-error")?.remove();
+    const notice = document.createElement("div");
+    notice.className = "entry-chat-image-upload-error";
+    notice.dataset.entryLlnkOwned = "1";
+    notice.setAttribute("role", "alert");
+
+    const ship = document.createElement("img");
+    ship.className = "entry-chat-image-upload-error-ship";
+    ship.src = chrome.runtime.getURL("assets/draft-restore/entrybot-spaceship-1.svg");
+    ship.alt = "";
+    ship.setAttribute("aria-hidden", "true");
+
+    const card = document.createElement("div");
+    card.className = "entry-chat-image-upload-error-card";
+    const title = document.createElement("strong");
+    title.className = "entry-chat-image-upload-error-title";
+    title.textContent = "이미지 업로드 실패";
+    const body = document.createElement("p");
+    body.className = "entry-chat-image-upload-error-message";
+    body.textContent = formatImageUploadError(message);
+    card.append(title, body);
+    notice.append(ship, card);
+    document.body.appendChild(notice);
+    notice.addEventListener("animationend", () => notice.remove(), { once: true });
+    window.setTimeout(() => notice.remove(), 7200);
   }
 
   function findImageFileInput(doc, depth = 0) {
@@ -1744,6 +2420,11 @@
       state.uploadCleanup = null;
       syncImageControlState();
     };
+    const fail = (message) => {
+      if (finished) return;
+      cleanup();
+      showImageUploadError(message);
+    };
     state.uploadCleanup = cleanup;
     syncImageControlState();
     const finish = async (url) => {
@@ -1780,6 +2461,11 @@
         finish(uploaded);
         return;
       }
+      const uploadError = scanImageUploadError(doc);
+      if (uploadError) {
+        fail(uploadError);
+        return;
+      }
       if (!injectSelectedImageFile(doc, file)) {
         clickImageToolbar(doc);
         injectSelectedImageFile(doc, file);
@@ -1805,6 +2491,10 @@
       if (event.origin !== "https://playentry.org") return;
       const data = event.data || {};
       if (data.source !== "entry-llnk-image-upload") return;
+      if (data.error) {
+        fail(data.error);
+        return;
+      }
       detectUploadedUrl(data.imageUrl || "");
     };
     window.addEventListener("message", messageHandler);
@@ -1815,7 +2505,7 @@
     timer = window.setInterval(inspect, 450);
     timeout = window.setTimeout(() => {
       if (finished) return;
-      cleanup();
+      fail("업로드할 수 없는 파일입니다.");
     }, 30000);
   }
 
@@ -1980,6 +2670,146 @@
     return element;
   }
 
+  function metricParts(value) {
+    const source = text(value);
+    const match = source.match(/(-?\d+)\s*$/);
+    if (!match) return null;
+    return {
+      count: Math.max(0, Number(match[1]) || 0),
+      prefix: source.slice(0, match.index),
+    };
+  }
+
+  function metricTextNode(element) {
+    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+    let matched = null;
+    let node = walker.nextNode();
+    while (node) {
+      if (!node.parentElement?.closest(".entry-llnk-metric-dial-layer") && /-?\d+\s*$/.test(node.nodeValue || "")) {
+        matched = node;
+      }
+      node = walker.nextNode();
+    }
+    return matched;
+  }
+
+  function metricBackground(element) {
+    let current = element;
+    while (current instanceof Element) {
+      const color = getComputedStyle(current).backgroundColor;
+      const channels = color?.match(/[\d.]+/g)?.map(Number) || [];
+      if (color && color !== "transparent" && (channels.length < 4 || channels[3] > 0)) return color;
+      current = current.parentElement;
+    }
+    return getComputedStyle(document.body).backgroundColor || "#fff";
+  }
+
+  function metricNumberBox(element, previous, next) {
+    const node = metricTextNode(element);
+    const source = node?.nodeValue || "";
+    const match = source.match(/(-?\d+)\s*$/);
+    if (!node || !match) return null;
+    const range = document.createRange();
+    range.setStart(node, match.index);
+    range.setEnd(node, match.index + match[1].length);
+    const numberRect = range.getBoundingClientRect();
+    const hostRect = element.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    const canvas = metricNumberBox.canvas || (metricNumberBox.canvas = document.createElement("canvas"));
+    const context = canvas.getContext("2d");
+    if (context) context.font = style.font;
+    const measuredWidth = context
+      ? Math.max(context.measureText(String(previous)).width, context.measureText(String(next)).width)
+      : numberRect.width;
+    return {
+      top: numberRect.top - hostRect.top,
+      left: numberRect.left - hostRect.left,
+      width: Math.max(numberRect.width, measuredWidth) + 2,
+      height: numberRect.height || hostRect.height,
+      background: metricBackground(element),
+    };
+  }
+
+  function finishMetricDial(element) {
+    const timer = metricAnimationTimers.get(element);
+    if (timer) window.clearTimeout(timer);
+    metricAnimationTimers.delete(element);
+    element.querySelector(":scope > .entry-llnk-metric-dial-layer")?.remove();
+    element.classList.remove(
+      "entry-llnk-metric-dial",
+      "entry-llnk-metric-dial-up",
+      "entry-llnk-metric-dial-down"
+    );
+    element.style.removeProperty("--entry-llnk-metric-color");
+    element.style.removeProperty("--entry-llnk-metric-top");
+    element.style.removeProperty("--entry-llnk-metric-left");
+    element.style.removeProperty("--entry-llnk-metric-width");
+    element.style.removeProperty("--entry-llnk-metric-height");
+    element.style.removeProperty("--entry-llnk-metric-background");
+  }
+
+  function animateMetricDial(element, previous, next) {
+    if (!(element instanceof Element) || previous === next) return;
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches) return;
+    finishMetricDial(element);
+    const box = metricNumberBox(element, previous, next);
+    if (!box) return;
+    element.style.setProperty("--entry-llnk-metric-color", getComputedStyle(element).color);
+    element.style.setProperty("--entry-llnk-metric-top", `${box.top}px`);
+    element.style.setProperty("--entry-llnk-metric-left", `${box.left}px`);
+    element.style.setProperty("--entry-llnk-metric-width", `${box.width}px`);
+    element.style.setProperty("--entry-llnk-metric-height", `${box.height}px`);
+    element.style.setProperty("--entry-llnk-metric-background", box.background);
+    const layer = document.createElement("span");
+    layer.className = "entry-llnk-metric-dial-layer";
+    layer.dataset.entryLlnkOwned = "1";
+    const oldValue = document.createElement("span");
+    oldValue.className = "entry-llnk-metric-dial-old";
+    oldValue.textContent = String(previous);
+    const nextValue = document.createElement("span");
+    nextValue.className = "entry-llnk-metric-dial-next";
+    nextValue.textContent = String(next);
+    layer.append(oldValue, nextValue);
+    element.appendChild(layer);
+    element.classList.add(
+      "entry-llnk-metric-dial",
+      next > previous ? "entry-llnk-metric-dial-up" : "entry-llnk-metric-dial-down"
+    );
+    const timer = window.setTimeout(() => finishMetricDial(element), 390);
+    metricAnimationTimers.set(element, timer);
+  }
+
+  function syncMetricElement(element) {
+    if (!(element instanceof Element)) return;
+    if (element.classList.contains("entry-llnk-metric-dial")) finishMetricDial(element);
+    const parts = metricParts(element.textContent);
+    if (!parts) return;
+    const previous = Number(element.dataset.entryLlnkMetricValue);
+    element.dataset.entryLlnkMetricValue = String(parts.count);
+    if (Number.isFinite(previous) && previous !== parts.count) {
+      animateMetricDial(element, previous, parts.count);
+    }
+  }
+
+  function syncMetricCounters(root = document) {
+    if (root instanceof Element && root.closest(".entry-llnk-metric-dial-layer")) return;
+    const counters = [];
+    if (root instanceof Element) {
+      const ownCounter = root.matches(METRIC_SELECTOR) ? root : root.closest(METRIC_SELECTOR);
+      if (ownCounter) counters.push(ownCounter);
+    }
+    counters.push(...$$(METRIC_SELECTOR, root));
+    [...new Set(counters)].forEach(syncMetricElement);
+  }
+
+  function setMetricCount(element, count) {
+    if (!(element instanceof Element)) return;
+    const parts = metricParts(element.textContent);
+    if (!parts) return;
+    element.textContent = `${parts.prefix}${Math.max(0, Number(count) || 0)}`;
+    syncMetricElement(element);
+  }
+
   function updateLivePostElement(element, post) {
     if (!element || !post?.id) return;
     element.entryLlnkPost = post;
@@ -2005,12 +2835,12 @@
       body.replaceChildren(...renderContent(content));
     }
     const like = $("[data-entry-chat-live-like='1']", element);
-    if (like) {
-      like.textContent = `좋아요 ${Math.max(0, Number(post.likesLength || 0))}`;
+    if (like && like.dataset.entryChatLiveBusy !== "1") {
+      setMetricCount(like, post.likesLength);
       like.classList.toggle("active", Boolean(post.isLike));
     }
     const reply = $("[data-entry-chat-live-reply='1']", element);
-    if (reply) reply.textContent = `댓글 ${Math.max(0, Number(post.commentsLength || 0))}`;
+    if (reply) setMetricCount(reply, post.commentsLength);
     const media = $("[data-entry-chat-live-media='1']", element);
     if (media) {
       media.replaceChildren();
@@ -2029,7 +2859,7 @@
       }
     }
     shortenProjectLinks(element);
-    applyPromotionFilter(element);
+    applyStoryFilters(element);
   }
 
   function renderNativePostFromData(element, post) {
@@ -2038,58 +2868,28 @@
     if (!body || !content) return;
     renderPostBody(body, content, true);
     shortenProjectLinks(element);
-    applyPromotionFilter(element);
+    applyStoryFilters(element);
   }
 
-  function clickLivePostLike(postId) {
-    return new Promise((resolve, reject) => {
-      if (!postId) return reject(new Error("글 정보를 찾을 수 없습니다."));
-      const iframe = document.createElement("iframe");
-      iframe.className = "entry-chat-hidden-entry-story-frame";
-      iframe.title = "엔트리이야기 좋아요 처리";
-      iframe.src = `/community/entrystory/${encodeURIComponent(text(postId))}?entry_llnk_like=${Date.now()}`;
-      let done = false;
-      const timeout = window.setTimeout(() => finish(new Error("좋아요 처리 시간이 초과됐습니다.")), 10000);
-      const finish = (error = null) => {
-        if (done) return;
-        done = true;
-        window.clearTimeout(timeout);
-        iframe.remove();
-        if (error) reject(error);
-        else resolve();
-      };
-      iframe.addEventListener("load", () => {
-        window.setTimeout(async () => {
-          try {
-            const doc = iframe.contentDocument;
-            const view = iframe.contentWindow;
-            if (!doc?.body || !view) throw new Error("엔트리이야기 글을 불러오지 못했습니다.");
-            const visible = (element) => {
-              if (!element) return false;
-              const style = view.getComputedStyle(element);
-              const rect = element.getBoundingClientRect();
-              return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
-            };
-            const like = $$('div[class~="e50391u0"] a.like, div[class~="e50391u0"] [class~="like"], a.like, button[aria-label*="좋아요"]', doc).find(visible);
-            if (!like) throw new Error("좋아요 버튼을 찾을 수 없습니다.");
-            const before = like.classList.contains("active") || like.getAttribute("aria-pressed") === "true";
-            like.scrollIntoView?.({ block: "center", inline: "center" });
-            like.focus?.();
-            ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach((type) => {
-              const EventClass = type.startsWith("pointer") && view.PointerEvent ? view.PointerEvent : view.MouseEvent;
-              like.dispatchEvent(new EventClass(type, { bubbles: true, cancelable: true, composed: true, view }));
-            });
-            await new Promise((next) => window.setTimeout(next, 1200));
-            const after = like.classList.contains("active") || like.getAttribute("aria-pressed") === "true";
-            if (after === before) throw new Error("좋아요를 바꾸지 못했습니다. 엔트리 로그인을 확인해 주세요.");
-            finish();
-          } catch (error) {
-            finish(error instanceof Error ? error : new Error(text(error)));
-          }
-        }, 900);
-      }, { once: true });
-      document.body.appendChild(iframe);
+  async function toggleLivePostLike(postId, likeId = "") {
+    const target = text(postId).trim();
+    if (!target) throw new Error("글 정보를 찾을 수 없습니다.");
+    const currentLikeId = text(likeId).trim();
+    if (currentLikeId) {
+      const query = `mutation UNLIKE($id: ID) { unlike(id: $id) { id } }`;
+      await Ringcl.entryGraphql("UNLIKE", query, { id: currentLikeId });
+      return "";
+    }
+    const query = `mutation LIKE($target: String, $targetSubject: String, $targetType: String, $groupId: ID) {
+      like(target: $target, targetSubject: $targetSubject, targetType: $targetType, groupId: $groupId) { id }
+    }`;
+    const data = await Ringcl.entryGraphql("LIKE", query, {
+      target,
+      targetSubject: "discuss",
     });
+    const nextLikeId = text(data?.like?.id).trim();
+    if (!nextLikeId) throw new Error("좋아요 결과를 확인하지 못했습니다.");
+    return nextLikeId;
   }
 
   function createLivePost(post) {
@@ -2155,18 +2955,22 @@
       event.stopPropagation();
       if (like.dataset.entryChatLiveBusy === "1") return;
       like.dataset.entryChatLiveBusy = "1";
-      const wasLiked = like.classList.contains("active");
+      const currentPost = item.entryLlnkPost || post;
+      const previousLikeId = currentPost.isLike || "";
+      const previousCount = Math.max(0, Number(currentPost.likesLength || 0));
+      const nextLiked = !Boolean(previousLikeId);
+      const nextCount = Math.max(0, previousCount + (nextLiked ? 1 : -1));
+      currentPost.isLike = nextLiked ? "entry-llnkk-pending-like" : "";
+      currentPost.likesLength = nextCount;
+      like.classList.toggle("active", nextLiked);
+      setMetricCount(like, nextCount);
       try {
-        const currentPost = item.entryLlnkPost || post;
-        await clickLivePostLike(currentPost.id);
-        const nextLiked = !wasLiked;
-        const nextCount = Math.max(0, Number(currentPost.likesLength || 0) + (nextLiked ? 1 : -1));
-        currentPost.isLike = nextLiked;
-        currentPost.likesLength = nextCount;
-        like.classList.toggle("active", nextLiked);
-        like.textContent = `좋아요 ${nextCount}`;
-      } catch (error) {
-        console.debug("[LLNKKR] 좋아요 처리 실패", error);
+        currentPost.isLike = await toggleLivePostLike(currentPost.id, previousLikeId);
+      } catch {
+        currentPost.isLike = previousLikeId;
+        currentPost.likesLength = previousCount;
+        like.classList.toggle("active", Boolean(previousLikeId));
+        setMetricCount(like, previousCount);
       } finally {
         delete like.dataset.entryChatLiveBusy;
       }
@@ -2192,7 +2996,12 @@
   }
 
   function normalizeLivePostKey(value) {
-    return text(value).replace(/[\u00b7\u30fb\u318d]/g, "\u00b7").replace(/\s+/g, " ").trim().slice(0, 500);
+    return text(value)
+      .replace(/https:\/\/llnk\.kr\//gi, "https://llnk.kr/")
+      .replace(/[\u00b7\u30fb\u318d]/g, "\u00b7")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 500);
   }
 
   function getLivePostKeyFromElement(post) {
@@ -2230,13 +3039,14 @@
 
   function maybeClearSubmittedDraft(posts = []) {
     const draft = readDraft();
-    if (!draft?.value?.trim()) return;
-    const submittedValue = state.draftSubmittedValue || draft.value;
-    const submitted = posts.some((post) => isPendingSubmittedPost(post, submittedValue, draft.savedAt));
+    const submittedValue = state.draftSubmittedValue || draft?.value || "";
+    if (!submittedValue.trim()) return;
+    const submittedAt = state.draftSubmittedAt || draft?.savedAt || 0;
+    const submitted = posts.some((post) => isPendingSubmittedPost(post, submittedValue, submittedAt));
     if (submitted) resetWriterAfterConfirmedPost(submittedValue);
   }
 
-  function isPendingSubmittedPost(post, submittedValue = state.draftSubmittedValue, savedAt = state.draftSavedAt) {
+  function isPendingSubmittedPost(post, submittedValue = state.draftSubmittedValue, savedAt = state.draftSubmittedAt || state.draftSavedAt) {
     const contentKey = normalizeLivePostKey(encodedPostValue(submittedValue));
     if (!post || !contentKey || normalizeLivePostKey(post.content) !== contentKey) return false;
     const ownerEntryUserId = draftOwnerId();
@@ -2245,13 +3055,33 @@
     return !Number.isFinite(createdAt) || !savedAt || createdAt >= savedAt - 120000;
   }
 
+  function isPendingSubmittedRow(row, submittedValue = state.draftSubmittedValue) {
+    if (!(row instanceof Element) || !submittedValue.trim() || Date.now() >= state.draftSubmitPendingUntil) return false;
+    const body = $(BODY_SELECTOR, row);
+    const content = normalizeLivePostKey(postBodySource(body));
+    const expected = normalizeLivePostKey(encodedPostValue(submittedValue));
+    if (!content || !expected || content !== expected) return false;
+    const profileLink = $(".css-lz5fzu a[href^='/profile/'], [class~='e143sozh0'] a[href^='/profile/']", row);
+    const profileId = text(profileLink?.getAttribute("href") || "").match(/^\/profile\/([a-f0-9]{24})/i)?.[1] || "";
+    const ownerEntryUserId = draftOwnerId();
+    return !ownerEntryUserId || !profileId || profileId === ownerEntryUserId;
+  }
+
   function resetWriterAfterConfirmedPost(expectedValue = "") {
-    clearDraftSubmitPending();
     const writer = getWriter();
     const currentValue = text(writer?.value);
     const expected = normalizeLivePostKey(encodedPostValue(expectedValue));
     const current = normalizeLivePostKey(encodedPostValue(currentValue));
-    if (currentValue.trim() && expected && current !== expected) return false;
+    const shouldResetWriter = !currentValue.trim() || !expected || current === expected;
+    const runtimeDraftMatchesExpected = expected
+      && normalizeLivePostKey(encodedPostValue(state.draftValue)) === expected;
+    clearDraftSubmitPending();
+    if (!shouldResetWriter) {
+      if (runtimeDraftMatchesExpected) discardStoredDraft();
+      saveDraft(writer);
+      clearDraftRestoreEffects();
+      return true;
+    }
     if (writer && !writer.closest(".entry-chat-root")) {
       const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
       if (setter) setter.call(writer, "");
@@ -2262,13 +3092,100 @@
       updateCounter(writer);
       scheduleWriterPreview(0);
     }
-    clearDraft();
+    discardStoredDraft();
+    clearDraftRestoreEffects();
     removeImageAttachment(null);
     return true;
   }
 
   function getLiveRows(list = getList()) {
     return list ? [...list.children].filter((element) => element.matches?.(POST_SELECTOR)) : [];
+  }
+
+  function snapshotLiveRowPositions(list = getList()) {
+    state.liveRowPositions = new Map(getLiveRows(list).map((row) => [row, row.offsetTop]));
+  }
+
+  function captureNativeArrivalScrollAnchor(list = getList()) {
+    state.nativeArrivalScrollAnchor = null;
+    if (!list || window.scrollY <= 80) return;
+    const row = getLiveRows(list).find((candidate) => {
+      const rect = candidate.getBoundingClientRect();
+      return rect.bottom > 0 && rect.top < window.innerHeight;
+    });
+    if (!row) return;
+    state.nativeArrivalScrollAnchor = {
+      row,
+      top: row.getBoundingClientRect().top,
+      expiresAt: performance.now() + 2500,
+    };
+  }
+
+  function restoreNativeArrivalScrollAnchor(consume = false) {
+    const anchor = state.nativeArrivalScrollAnchor;
+    if (!anchor) return false;
+    if (!anchor.row?.isConnected || performance.now() > anchor.expiresAt || window.scrollY <= 80) {
+      state.nativeArrivalScrollAnchor = null;
+      return false;
+    }
+    const delta = anchor.row.getBoundingClientRect().top - anchor.top;
+    if (Math.abs(delta) > 0.5) {
+      window.scrollTo({
+        top: window.scrollY + delta,
+        left: window.scrollX,
+        behavior: "instant",
+      });
+    }
+    if (consume) state.nativeArrivalScrollAnchor = null;
+    return true;
+  }
+
+  function animateExistingRowsForInsertion(rows = [], list = getList()) {
+    const inserted = new Set(rows.filter((row) => !state.liveRowPositions.has(row)));
+    if (!inserted.size || !state.liveRowPositions.size) {
+      snapshotLiveRowPositions(list);
+      return;
+    }
+    const viewportStabilized = restoreNativeArrivalScrollAnchor(true);
+    if (!viewportStabilized && !window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+      getLiveRows(list).forEach((row) => {
+        if (inserted.has(row) || row.classList.contains("entry-llnk-live-post-arriving")) return;
+        const previousTop = state.liveRowPositions.get(row);
+        if (!Number.isFinite(previousTop)) return;
+        const offset = previousTop - row.offsetTop;
+        if (Math.abs(offset) < 1) return;
+        row.animate(
+          [{ transform: `translate3d(0, ${offset}px, 0)` }, { transform: "translate3d(0, 0, 0)" }],
+          { duration: 240, easing: "cubic-bezier(0.22, 1, 0.36, 1)" }
+        );
+      });
+    }
+    snapshotLiveRowPositions(list);
+  }
+
+  function animateExistingRowsAfterRemoval(list = getList()) {
+    if (!state.nativeRemovalPending || !state.liveRowPositions.size) return;
+    state.nativeRemovalPending = false;
+    if (!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+      getLiveRows(list).forEach((row) => {
+        const previousTop = state.liveRowPositions.get(row);
+        if (!Number.isFinite(previousTop)) return;
+        const offset = previousTop - row.offsetTop;
+        if (Math.abs(offset) < 1) return;
+        row.style.setProperty("--entry-llnk-removal-shift", `${offset}px`);
+        row.classList.remove("is-moving-after-removal");
+        row.classList.add("entry-llnk-moving-after-removal");
+        void row.offsetHeight;
+        window.requestAnimationFrame(() => {
+          if (!row.isConnected) return;
+          row.classList.add("is-moving-after-removal");
+          window.setTimeout(() => {
+            row.classList.remove("entry-llnk-moving-after-removal", "is-moving-after-removal");
+            row.style.removeProperty("--entry-llnk-removal-shift");
+          }, 280);
+        });
+      });
+    }
   }
 
   function bindLiveRows(list, posts) {
@@ -2285,6 +3202,551 @@
       if (matches.length !== 1) return;
       const id = text(matches[0]?.id || "").trim();
       if (id) row.dataset.entryChatLivePostId = id;
+    });
+  }
+
+  function primeNativeLivePostArrival(detail = {}) {
+    const incomingPosts = parseNativeLivePosts(detail);
+    if (
+      incomingPosts.length
+      && Date.now() < state.draftSubmitPendingUntil
+      && text(state.draftSubmittedValue).trim()
+    ) maybeClearSubmittedDraft(incomingPosts);
+    const count = Math.max(0, Number(detail.count) || (Array.isArray(detail.ids) ? detail.ids.length : 0));
+    if (count) {
+      snapshotLiveRowPositions();
+      captureNativeArrivalScrollAnchor();
+    }
+    getLiveRows().forEach((row) => {
+      row.dataset.entryLlnkArrivalDelivered = "1";
+    });
+    if (!count || !state.spaceshipMotionEnabled || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+      state.nativeArrivalPending = 0;
+      return;
+    }
+    state.nativeArrivalPending = count;
+    state.nativeArrivalSequence = 0;
+    state.nativeArrivalExpiresAt = performance.now() + 2000;
+  }
+
+  function playLivePostArrivalDelivery(row, delay = 0, showShip = true) {
+    if (!row?.isConnected || isStoryPostFiltered(row) || !state.spaceshipMotionEnabled || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+    let flight = null;
+    let beam = null;
+    if (showShip) {
+      flight = document.createElement("span");
+      flight.className = "entry-llnk-live-post-flight";
+      flight.dataset.entryLlnkOwned = "1";
+      flight.setAttribute("aria-hidden", "true");
+      const frame = document.createElement("img");
+      frame.src = chrome.runtime.getURL("assets/draft-restore/entrybot-spaceship-1.svg");
+      frame.alt = "";
+      frame.draggable = false;
+      flight.appendChild(frame);
+      beam = document.createElement("span");
+      beam.className = "entry-llnk-live-post-flight-beam";
+      flight.appendChild(beam);
+      document.body.appendChild(flight);
+    }
+
+    const initialRect = row.getBoundingClientRect();
+    const targetDocumentTop = initialRect.top + window.scrollY;
+    const targetLeft = initialRect.left;
+    const targetWidth = initialRect.width;
+    const startOffsetX = -Math.max(360, targetLeft + targetWidth + 140);
+    const duration = 980;
+    const startsAt = performance.now() + Math.max(0, Number(delay) || 0);
+    let animationFrame = 0;
+    let finished = false;
+    const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+    const mix = (start, end, amount) => start + (end - start) * amount;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      window.cancelAnimationFrame(animationFrame);
+      row.classList.remove("entry-llnk-live-post-arriving");
+      row.style.removeProperty("--entry-llnk-live-arrival-delay");
+      row.style.removeProperty("opacity");
+      row.style.removeProperty("transform");
+      flight?.remove();
+      state.liveArrivalCleanups.delete(finish);
+    };
+    state.liveArrivalCleanups.add(finish);
+    const renderFrame = (now) => {
+      if (!row.isConnected) {
+        finish();
+        return;
+      }
+      if (now < startsAt) {
+        animationFrame = window.requestAnimationFrame(renderFrame);
+        return;
+      }
+      const progress = clamp((now - startsAt) / duration, 0, 1);
+      const targetTop = targetDocumentTop - window.scrollY;
+      let cardX = 0;
+      let cardY = 0;
+      let cardScale = 1;
+      let cardOpacity = 1;
+      if (progress < 0.68) {
+        const local = progress / 0.68;
+        const eased = 1 - (1 - local) ** 3;
+        cardX = mix(startOffsetX, 0, eased);
+        cardY = mix(-92, -13, eased) - Math.sin(local * Math.PI) * 9;
+        cardScale = mix(0.94, 0.992, eased);
+        cardOpacity = clamp(local / 0.08, 0, 1);
+      } else if (progress < 0.84) {
+        const local = (progress - 0.68) / 0.16;
+        const eased = local * local * (3 - 2 * local);
+        cardY = mix(-13, 4, eased);
+        cardScale = mix(0.992, 1.003, eased);
+      } else {
+        const local = (progress - 0.84) / 0.16;
+        const eased = local * local * (3 - 2 * local);
+        cardY = mix(4, 0, eased);
+        cardScale = mix(1.003, 1, eased);
+      }
+      row.style.opacity = String(cardOpacity);
+      row.style.transform = `translate3d(${cardX}px, ${cardY}px, 0) scale(${cardScale})`;
+
+      if (!flight || !beam) {
+        if (progress >= 1) {
+          finish();
+          return;
+        }
+        animationFrame = window.requestAnimationFrame(renderFrame);
+        return;
+      }
+
+      const carryEnd = 0.74;
+      let shipX;
+      let shipY;
+      let shipScale;
+      let shipRotate;
+      let shipOpacity = 1;
+      if (progress <= carryEnd) {
+        shipX = targetLeft + targetWidth * 0.5 + cardX - 37;
+        shipY = targetTop + cardY - 89;
+        shipScale = 0.72 + Math.sin((progress / carryEnd) * Math.PI) * 0.05;
+        shipRotate = -5 + Math.sin((progress / carryEnd) * Math.PI * 2) * 2.5;
+        shipOpacity = clamp(progress / 0.05, 0, 1);
+        beam.style.height = `${Math.max(34, targetTop + cardY - (shipY + 57))}px`;
+        beam.style.opacity = String(clamp(progress / 0.08, 0, 1) * clamp((carryEnd - progress) / 0.08, 0, 1));
+      } else {
+        const local = (progress - carryEnd) / (1 - carryEnd);
+        const eased = local ** 3;
+        shipX = mix(targetLeft + targetWidth * 0.5 - 37, window.innerWidth + 150, eased);
+        shipY = mix(targetTop - 89, targetTop - 210, eased) - Math.sin(local * Math.PI) * 14;
+        shipScale = mix(0.72, 1.45, eased);
+        shipRotate = mix(-5, 32, eased);
+        shipOpacity = local > 0.72 ? clamp((1 - local) / 0.28, 0, 1) : 1;
+        beam.style.opacity = "0";
+      }
+      flight.style.opacity = String(shipOpacity);
+      flight.style.transform = `translate3d(${shipX}px, ${shipY}px, 0) rotateZ(${shipRotate}deg) scale(${shipScale})`;
+      if (progress >= 1) {
+        finish();
+        return;
+      }
+      animationFrame = window.requestAnimationFrame(renderFrame);
+    };
+    animationFrame = window.requestAnimationFrame(renderFrame);
+  }
+
+  function findLiveRowForPost(id, post = null, list = getList()) {
+    const postId = text(id).trim();
+    const postKey = getLivePostKeyFromData(post);
+    const postIdentity = getLivePostIdentityFromData(post);
+    return (postId && list?.querySelector?.(`[data-entry-chat-live-post-id="${CSS.escape(postId)}"]`))
+      || getLiveRows(list).find((candidate) => postKey && getLivePostKeyFromElement(candidate) === postKey)
+      || getLiveRows(list).find((candidate) => postIdentity && getLivePostIdentityFromElement(candidate) === postIdentity)
+      || null;
+  }
+
+  function releaseLivePostUpdateLayout(row) {
+    const layout = state.liveUpdateLayouts.get(row);
+    if (!layout) return;
+    window.clearTimeout(layout.cleanupTimer);
+    const body = layout.body;
+    if (body?.isConnected) {
+      body.style.height = layout.height;
+      body.style.overflow = layout.overflow;
+      body.style.transition = layout.transition;
+      body.style.willChange = layout.willChange;
+    }
+    state.liveUpdateLayouts.delete(row);
+  }
+
+  function freezeLivePostUpdateLayout(row, body, height) {
+    releaseLivePostUpdateLayout(row);
+    const layout = {
+      body,
+      oldHeight: height,
+      height: body.style.height,
+      overflow: body.style.overflow,
+      transition: body.style.transition,
+      willChange: body.style.willChange,
+      cleanupTimer: 0,
+    };
+    body.style.transition = "none";
+    body.style.height = `${height}px`;
+    body.style.overflow = "hidden";
+    body.style.willChange = "height, opacity, filter, transform";
+    state.liveUpdateLayouts.set(row, layout);
+    return layout;
+  }
+
+  function resizeLivePostUpdateLayout(row) {
+    const layout = state.liveUpdateLayouts.get(row);
+    if (!layout) return;
+    const body = $(BODY_SELECTOR, row);
+    if (!body) return;
+    if (body !== layout.body) {
+      if (layout.body?.isConnected) {
+        layout.body.style.height = layout.height;
+        layout.body.style.overflow = layout.overflow;
+        layout.body.style.transition = layout.transition;
+        layout.body.style.willChange = layout.willChange;
+      }
+      layout.body = body;
+      layout.height = body.style.height;
+      layout.overflow = body.style.overflow;
+      layout.transition = body.style.transition;
+      layout.willChange = body.style.willChange;
+    }
+    body.style.transition = "none";
+    body.style.height = "auto";
+    body.style.overflow = "hidden";
+    const targetHeight = body.getBoundingClientRect().height;
+    body.style.height = `${layout.oldHeight}px`;
+    body.style.willChange = "height, opacity, filter, transform";
+    void body.offsetHeight;
+    body.style.transition = "height 680ms cubic-bezier(0.22, 1, 0.36, 1)";
+    window.requestAnimationFrame(() => {
+      if (body.isConnected) body.style.height = `${targetHeight}px`;
+    });
+    layout.cleanupTimer = window.setTimeout(() => releaseLivePostUpdateLayout(row), 760);
+  }
+
+  function playLivePostUpdateRestore(row, delay = 0) {
+    if (!row?.isConnected || isStoryPostFiltered(row) || !state.spaceshipMotionEnabled || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+    const body = $(BODY_SELECTOR, row);
+    if (!body) return;
+    const flight = document.createElement("span");
+    flight.className = "entry-llnk-live-post-flight entry-llnk-live-post-flight-updating";
+    flight.dataset.entryLlnkOwned = "1";
+    flight.setAttribute("aria-hidden", "true");
+    const frame = document.createElement("img");
+    frame.src = chrome.runtime.getURL("assets/draft-restore/entrybot-spaceship-1.svg");
+    frame.alt = "";
+    frame.draggable = false;
+    flight.appendChild(frame);
+    const beam = document.createElement("span");
+    beam.className = "entry-llnk-live-post-flight-beam";
+    flight.appendChild(beam);
+    const updateField = document.createElement("span");
+    updateField.className = "entry-llnk-live-post-update-field";
+    updateField.dataset.entryLlnkOwned = "1";
+    updateField.setAttribute("aria-hidden", "true");
+    document.body.appendChild(flight);
+    document.body.appendChild(updateField);
+    row.classList.remove("is-restoring-live-update");
+    row.classList.add("entry-llnk-live-post-updating");
+
+    const bodyRect = body.getBoundingClientRect();
+    freezeLivePostUpdateLayout(row, body, bodyRect.height);
+    let trackedLeft = bodyRect.left;
+    let trackedTop = bodyRect.top + window.scrollY;
+    let trackedWidth = bodyRect.width;
+    let trackedHeight = bodyRect.height;
+    const outsideX = window.innerWidth + 150;
+    const duration = 2200;
+    const startsAt = performance.now() + Math.max(0, Number(delay) || 0);
+    let animationFrame = 0;
+    let finished = false;
+    const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+    const mix = (start, end, amount) => start + (end - start) * amount;
+    const smooth = (value) => value * value * (3 - 2 * value);
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      window.cancelAnimationFrame(animationFrame);
+      row.classList.remove("entry-llnk-live-post-updating", "is-restoring-live-update");
+      releaseLivePostUpdateLayout(row);
+      flight.remove();
+      updateField.remove();
+      state.liveArrivalCleanups.delete(finish);
+    };
+    state.liveArrivalCleanups.add(finish);
+    const renderFrame = (now) => {
+      if (!row.isConnected) {
+        finish();
+        return;
+      }
+      if (now < startsAt) {
+        animationFrame = window.requestAnimationFrame(renderFrame);
+        return;
+      }
+      const progress = clamp((now - startsAt) / duration, 0, 1);
+      const activeBody = $(BODY_SELECTOR, row);
+      if (activeBody) {
+        const activeRect = activeBody.getBoundingClientRect();
+        trackedLeft = mix(trackedLeft, activeRect.left, 0.2);
+        trackedTop = mix(trackedTop, activeRect.top + window.scrollY, 0.2);
+        trackedWidth = mix(trackedWidth, activeRect.width, 0.2);
+        trackedHeight = mix(trackedHeight, activeRect.height, 0.2);
+      }
+      const bodyTop = trackedTop - window.scrollY;
+      const hoverX = trackedLeft + trackedWidth * 0.5 - 37;
+      let shipX = hoverX;
+      let shipY = bodyTop - 94;
+      let shipScale = 0.74;
+      let shipRotate = -6;
+      let shipOpacity = 1;
+      let beamOpacity = 0;
+      if (progress < 0.28) {
+        const local = smooth(progress / 0.28);
+        shipX = mix(outsideX, hoverX, local);
+        shipY += mix(-48, 0, local) - Math.sin(local * Math.PI) * 11;
+        shipScale = mix(1.32, 0.74, local);
+        shipRotate = mix(22, -6, local);
+        shipOpacity = clamp(local / 0.16, 0, 1);
+        beamOpacity = 0;
+      } else if (progress < 0.76) {
+        const local = (progress - 0.28) / 0.48;
+        shipX = hoverX + Math.sin(local * Math.PI * 2) * 5;
+        shipY -= Math.sin(local * Math.PI * 3) * 4;
+        shipScale = 0.74 + Math.sin(local * Math.PI * 2) * 0.018;
+        shipRotate = -6 + Math.sin(local * Math.PI * 2) * 1.8;
+        beamOpacity = 0.94 * clamp(local / 0.1, 0, 1) * clamp((1 - local) / 0.12, 0, 1);
+      } else {
+        const local = smooth((progress - 0.76) / 0.24);
+        shipX = mix(hoverX, outsideX, local);
+        shipY += mix(0, -78, local) - Math.sin(local * Math.PI) * 11;
+        shipScale = mix(0.74, 1.34, local);
+        shipRotate = mix(-6, 24, local);
+        shipOpacity = local > 0.7 ? clamp((1 - local) / 0.3, 0, 1) : 1;
+        beamOpacity = 0;
+      }
+      beam.style.width = `${Math.max(170, trackedWidth + 34)}px`;
+      beam.style.height = `${Math.max(46, trackedHeight + 48)}px`;
+      beam.style.opacity = String(beamOpacity);
+      beam.style.left = `calc(50% + ${-Math.sin(shipRotate * Math.PI / 180) * 16}px)`;
+      updateField.style.left = `${trackedLeft - 12}px`;
+      updateField.style.top = `${bodyTop - 10}px`;
+      updateField.style.width = `${trackedWidth + 24}px`;
+      updateField.style.height = `${trackedHeight + 20}px`;
+      updateField.style.opacity = String(beamOpacity * 0.78);
+      updateField.style.filter = `brightness(${Math.round(progress * 18) % 2 ? 1.06 : 0.98})`;
+      flight.style.opacity = String(shipOpacity);
+      flight.style.transform = `translate3d(${shipX}px, ${shipY}px, 0) scale(${shipScale})`;
+      frame.style.transform = `rotateZ(${shipRotate}deg)`;
+      if (progress >= 1) {
+        finish();
+        return;
+      }
+      animationFrame = window.requestAnimationFrame(renderFrame);
+    };
+    animationFrame = window.requestAnimationFrame(renderFrame);
+  }
+
+  function parseNativeLivePosts(detail = {}) {
+    try {
+      const posts = JSON.parse(text(detail.postsJson || "[]"));
+      return Array.isArray(posts) ? posts : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function primeNativeLivePostUpdate(detail = {}) {
+    const ids = Array.isArray(detail.ids) ? detail.ids.map((id) => text(id).trim()).filter(Boolean) : [];
+    if (!ids.length || !state.spaceshipMotionEnabled || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+    const posts = parseNativeLivePosts(detail);
+    const list = getList();
+    ids.forEach((id, index) => {
+      const post = posts.find((item) => text(item?.id) === id);
+      const row = findLiveRowForPost(id, post, list);
+      if (row && !row.dataset.entryChatLivePostId) row.dataset.entryChatLivePostId = id;
+      if (row) playLivePostUpdateRestore(row, Math.min(index * 45, 135));
+    });
+  }
+
+  function completeNativeLivePostUpdate(detail = {}) {
+    const ids = Array.isArray(detail.ids) ? detail.ids.map((id) => text(id).trim()).filter(Boolean) : [];
+    if (!ids.length || !state.spaceshipMotionEnabled || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+    const posts = parseNativeLivePosts(detail);
+    window.requestAnimationFrame(() => {
+      ids.forEach((id) => {
+        const post = posts.find((item) => text(item?.id) === id);
+        const row = findLiveRowForPost(id, post);
+        if (!row) return;
+        resizeLivePostUpdateLayout(row);
+        row.classList.remove("is-restoring-live-update");
+        void row.offsetHeight;
+        row.classList.add("is-restoring-live-update");
+      });
+    });
+  }
+
+  function playLivePostRemovalPickup(row, delay = 0) {
+    if (!row?.isConnected || isStoryPostFiltered(row) || !state.spaceshipMotionEnabled || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+    const flight = document.createElement("span");
+    flight.className = "entry-llnk-live-post-flight entry-llnk-live-post-flight-removing";
+    flight.dataset.entryLlnkOwned = "1";
+    flight.setAttribute("aria-hidden", "true");
+    const frame = document.createElement("img");
+    frame.src = chrome.runtime.getURL("assets/draft-restore/entrybot-spaceship-1.svg");
+    frame.alt = "";
+    frame.draggable = false;
+    flight.appendChild(frame);
+    const beam = document.createElement("span");
+    beam.className = "entry-llnk-live-post-flight-beam";
+    flight.appendChild(beam);
+
+    const initialRect = row.getBoundingClientRect();
+    const targetDocumentTop = initialRect.top + window.scrollY;
+    const targetLeft = initialRect.left;
+    const targetWidth = initialRect.width;
+    const initialShipX = window.innerWidth + 110;
+    const initialShipY = initialRect.top - 89;
+    flight.style.opacity = "0";
+    flight.style.transform = `translate3d(${initialShipX}px, ${initialShipY}px, 0) rotateZ(14deg) scale(1.08)`;
+    flight.style.visibility = "hidden";
+    document.body.appendChild(flight);
+    const duration = 900;
+    const startsAt = performance.now() + Math.max(0, Number(delay) || 0);
+    let animationFrame = 0;
+    let finished = false;
+    const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+    const mix = (start, end, amount) => start + (end - start) * amount;
+    const finish = (keepHidden = false) => {
+      if (finished) return;
+      finished = true;
+      window.cancelAnimationFrame(animationFrame);
+      if (!keepHidden) {
+        row.style.removeProperty("opacity");
+        row.style.removeProperty("transform");
+      }
+      flight.style.visibility = "hidden";
+      flight.remove();
+      state.liveArrivalCleanups.delete(finish);
+    };
+    state.liveArrivalCleanups.add(finish);
+    const renderFrame = (now) => {
+      if (!row.isConnected) {
+        finish();
+        return;
+      }
+      if (now < startsAt) {
+        animationFrame = window.requestAnimationFrame(renderFrame);
+        return;
+      }
+      const progress = clamp((now - startsAt) / duration, 0, 1);
+      const targetTop = targetDocumentTop - window.scrollY;
+      const approach = clamp(progress / 0.3, 0, 1);
+      const approachEased = 1 - (1 - approach) ** 3;
+      const carry = clamp((progress - 0.3) / 0.7, 0, 1);
+      const carryEased = carry ** 3;
+      const centerX = targetLeft + targetWidth * 0.5 - 37;
+      const cardX = mix(0, -Math.max(390, targetLeft + targetWidth + 130), carryEased);
+      const cardY = -Math.sin(Math.min(1, carry / 0.72) * Math.PI * 0.5) * 22 - carryEased * 28;
+      const cardScale = mix(1, 0.965, carryEased);
+      const cardOpacity = 1 - clamp((carry - 0.78) / 0.22, 0, 1);
+      const approachX = mix(initialShipX, centerX, approachEased);
+      const carryBlend = clamp((progress - 0.28) / 0.08, 0, 1);
+      const shipX = mix(approachX, centerX + cardX, carryBlend);
+      const shipY = targetTop - 89 + cardY - Math.sin(progress * Math.PI) * 7;
+      const shipScale = mix(1.08, 0.72, approachEased) + carryEased * 0.3;
+      const shipRotate = mix(14, -5, approachEased) - carryEased * 14;
+      row.style.opacity = String(cardOpacity);
+      row.style.transform = `translate3d(${cardX}px, ${cardY}px, 0) scale(${cardScale})`;
+      beam.style.height = `${Math.max(34, targetTop - (shipY + 57))}px`;
+      beam.style.opacity = String(clamp((progress - 0.12) / 0.14, 0, 1) * clamp((0.84 - progress) / 0.18, 0, 1));
+      flight.style.opacity = String(clamp(progress / 0.06, 0, 1) * clamp((1 - progress) / 0.12, 0, 1));
+      flight.style.visibility = "visible";
+      flight.style.transform = `translate3d(${shipX}px, ${shipY}px, 0) rotateZ(${shipRotate}deg) scale(${shipScale})`;
+      if (progress >= 1) {
+        row.style.opacity = "0";
+        flight.style.visibility = "hidden";
+        finish(true);
+        return;
+      }
+      animationFrame = window.requestAnimationFrame(renderFrame);
+    };
+    animationFrame = window.requestAnimationFrame(renderFrame);
+  }
+
+  function primeNativeLivePostRemoval(detail = {}) {
+    const ids = Array.isArray(detail.ids) ? detail.ids.map((id) => text(id).trim()).filter(Boolean) : [];
+    if (!ids.length) return;
+    let posts = [];
+    try {
+      posts = JSON.parse(text(detail.postsJson || "[]"));
+    } catch {
+      posts = [];
+    }
+    snapshotLiveRowPositions();
+    state.nativeRemovalPending = true;
+    if (!state.spaceshipMotionEnabled || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+    const list = getList();
+    ids.forEach((id, index) => {
+      const post = posts.find((item) => text(item?.id) === id);
+      const postKey = getLivePostKeyFromData(post);
+      const postIdentity = getLivePostIdentityFromData(post);
+      const row = list?.querySelector?.(`[data-entry-chat-live-post-id="${CSS.escape(id)}"]`)
+        || getLiveRows(list).find((candidate) => postKey && getLivePostKeyFromElement(candidate) === postKey)
+        || getLiveRows(list).find((candidate) => postIdentity && getLivePostIdentityFromElement(candidate) === postIdentity);
+      if (row && !row.dataset.entryChatLivePostId) row.dataset.entryChatLivePostId = id;
+      if (row) playLivePostRemovalPickup(row, Math.min(index * 50, 150));
+    });
+  }
+
+  function animatePendingNativeRows(node) {
+    if (state.nativeArrivalPending && performance.now() > state.nativeArrivalExpiresAt) {
+      state.nativeArrivalPending = 0;
+    }
+    const rows = [];
+    if (node instanceof Element) {
+      if (node.matches(POST_SELECTOR)) rows.push(node);
+      node.querySelectorAll?.(POST_SELECTOR).forEach((row) => rows.push(row));
+    }
+    const uniqueRows = [...new Set(rows)];
+    animateExistingRowsForInsertion(uniqueRows.filter((row) => !isStoryPostFiltered(row)));
+    uniqueRows.forEach((row) => {
+      if (row.dataset.entryLlnkArrivalDelivered === "1") return;
+      const submittedValue = text(state.draftSubmittedValue);
+      const isSubmittedRow = isPendingSubmittedRow(row, submittedValue);
+      if (isStoryPostFiltered(row)) {
+        if (state.nativeArrivalPending) {
+          state.nativeArrivalPending -= 1;
+        }
+        if (isSubmittedRow) resetWriterAfterConfirmedPost(submittedValue);
+        row.dataset.entryLlnkArrivalDelivered = "1";
+        return;
+      }
+      if (isSubmittedRow) {
+        const showShip = true;
+        if (state.nativeArrivalPending) {
+          state.nativeArrivalSequence += 1;
+          state.nativeArrivalPending -= 1;
+        }
+        resetWriterAfterConfirmedPost(submittedValue);
+        row.dataset.entryLlnkArrivalDelivered = "1";
+        if (state.spaceshipMotionEnabled && !window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+          row.style.setProperty("--entry-llnk-live-arrival-delay", "0ms");
+          row.classList.add("entry-llnk-live-post-arriving");
+          playLivePostArrivalDelivery(row, 20, showShip);
+        }
+        return;
+      }
+      if (!state.nativeArrivalPending || row.classList.contains("entry-llnk-live-post-arriving")) return;
+      const showShip = state.nativeArrivalSequence === 0;
+      state.nativeArrivalSequence += 1;
+      state.nativeArrivalPending -= 1;
+      row.dataset.entryLlnkArrivalDelivered = "1";
+      row.style.setProperty("--entry-llnk-live-arrival-delay", "0ms");
+      row.classList.add("entry-llnk-live-post-arriving");
+      playLivePostArrivalDelivery(row, 20, showShip);
     });
   }
 
@@ -2371,9 +3833,10 @@
     state.livePosts = posts;
     const pendingDraft = readDraft();
     const pendingValue = state.draftSubmittedValue || pendingDraft?.value || "";
+    const pendingSavedAt = state.draftSubmittedAt || pendingDraft?.savedAt || 0;
     const locallySubmittedIds = new Set(
       posts
-        .filter((post) => isPendingSubmittedPost(post, pendingValue, pendingDraft?.savedAt || 0))
+        .filter((post) => isPendingSubmittedPost(post, pendingValue, pendingSavedAt))
         .map((post) => text(post.id))
         .filter(Boolean)
     );
@@ -2407,27 +3870,24 @@
     if (fresh.length && anchor && window.scrollY > 80) window.scrollBy(0, anchor.getBoundingClientRect().top - anchorTop);
     if (fresh.length) {
       const up = $(".entry-chat-entry-story-scroll-top[data-entry-llnk-owned='1']");
-      up?.classList.add("has-new-post");
+      updateNewPostIndicator(up);
     }
   }
 
   async function refreshLive() {
-    if (!isEntryStoryListPage() || document.visibilityState === "hidden" || state.liveAbort || new URLSearchParams(location.search).get("sort") && new URLSearchParams(location.search).get("sort") !== "created") return;
+    if (!isLiveEntryStoryPage() || document.visibilityState === "hidden" || state.liveAbort) return;
     const controller = new AbortController();
     state.liveAbort = controller;
     try {
       applyLivePosts(await fetchLivePosts(controller.signal));
-    } catch (error) {
-      if (error.name !== "AbortError") console.debug("[LLNKKR] 실시간 갱신 실패", error);
+    } catch {
     } finally {
       if (state.liveAbort === controller) state.liveAbort = null;
     }
   }
 
   function startLiveRefresh() {
-    if (!state.liveRefreshEnabled || !isEntryStoryListPage() || state.liveTimer) return;
-    window.setTimeout(refreshLive, 900);
-    state.liveTimer = window.setInterval(refreshLive, LIVE_REFRESH_MS);
+    stopLiveRefresh();
   }
 
   function stopLiveRefresh() {
@@ -2443,23 +3903,44 @@
   function startObserver() {
     if (state.observer) return;
     const roots = new Set();
+    const arrivalRoots = new Set();
     let flushQueued = false;
+    let removalObserved = false;
     const flush = () => {
       flushQueued = false;
       if (!roots.size) return;
+      const shouldAnimateRemoval = removalObserved;
+      removalObserved = false;
       const pendingRoots = [...roots];
+      const pendingArrivalRoots = [...arrivalRoots];
       roots.clear();
+      arrivalRoots.clear();
       pendingRoots.forEach((root, index) => processRoot(root, { skipPageUi: index < pendingRoots.length - 1 }));
+      pendingArrivalRoots.forEach(animatePendingNativeRows);
       scheduleLiveDedupe();
+      if (shouldAnimateRemoval) animateExistingRowsAfterRemoval();
+      snapshotLiveRowPositions();
     };
     const schedule = (mutations) => {
+      let arrivalPostAdded = false;
       mutations.forEach((mutation) => {
         if (mutation.type === "characterData" && mutation.target.parentElement) roots.add(mutation.target.parentElement);
         mutation.addedNodes.forEach((node) => {
+          if (node instanceof Element && (node.matches?.(POST_SELECTOR) || node.querySelector?.(POST_SELECTOR))) {
+            arrivalPostAdded = true;
+          }
+          if (node instanceof Element) arrivalRoots.add(node);
           if (node instanceof Element) roots.add(node);
           else if (node.parentElement) roots.add(node.parentElement);
         });
+        mutation.removedNodes.forEach((node) => {
+          if (node instanceof Element && (node.matches?.(POST_SELECTOR) || node.querySelector?.(POST_SELECTOR))) {
+            removalObserved = true;
+            roots.add(mutation.target);
+          }
+        });
       });
+      if (arrivalPostAdded) restoreNativeArrivalScrollAnchor();
       if (!roots.size || flushQueued) return;
       flushQueued = true;
       window.requestAnimationFrame(flush);
@@ -2475,36 +3956,66 @@
     Ringcl.ensureIconFont?.();
     restoreDraftSubmitPending();
     processRoot(document);
+    snapshotLiveRowPositions();
     startObserver();
+    bindReplyFoldScrollStabilizer();
     startLiveRefresh();
     refreshDraftOwner(true).catch(() => {});
     Ringcl.storageGet(["entryLlnkSettings"]).then((saved) => {
       const settings = saved.entryLlnkSettings || {};
-      state.hidePromotions = settings.hidePromotions !== false;
+      state.pageSettings = normalizePageSettings(settings);
+      state.storyFilters = normalizeStoryFilters(settings.storyFilters, settings.hidePromotions);
       state.autoMoreEnabled = settings.autoMore !== false;
       state.liveRefreshEnabled = settings.liveRefresh !== false;
       state.imageSpoilerEnabled = settings.imageSpoiler !== false;
+      state.shortenProjectLinksEnabled = settings.shortenProjectLinks !== false;
       state.draftEnabled = settings.draft !== false;
+      state.spaceshipMotionEnabled = settings.spaceshipMotion !== false;
+      if (!state.spaceshipMotionEnabled) clearSpaceshipMotionEffects();
       document.documentElement.classList.toggle("entry-chat-image-spoiler-enabled", state.imageSpoilerEnabled);
       if (state.liveRefreshEnabled) startLiveRefresh();
       else stopLiveRefresh();
       processRoot(document);
+      shortenProjectLinks(document);
     }).catch(() => {});
     window.addEventListener("scroll", onScroll, { passive: true });
     window.addEventListener("resize", onScroll, { passive: true });
+    window.addEventListener("entry-llnk-native-posts-added", (event) => {
+      window.requestAnimationFrame(() => {
+        restoreNativeArrivalScrollAnchor();
+        updateNewPostIndicator();
+      });
+    });
+    window.addEventListener("entry-llnk-native-posts-will-add", (event) => {
+      primeNativeLivePostArrival(event.detail || {});
+    });
+    window.addEventListener("entry-llnk-native-posts-will-remove", (event) => {
+      primeNativeLivePostRemoval(event.detail || {});
+    });
+    window.addEventListener("entry-llnk-native-posts-will-update", (event) => {
+      primeNativeLivePostUpdate(event.detail || {});
+    });
+    window.addEventListener("entry-llnk-native-posts-updated", (event) => {
+      completeNativeLivePostUpdate(event.detail || {});
+    });
     window.addEventListener("focus", () => refreshDraftOwner(true).catch(() => {}));
     chrome.storage.onChanged.addListener((changes, area) => {
       if (area !== "local" || !changes.entryLlnkSettings) return;
       const next = changes.entryLlnkSettings.newValue || {};
-      state.hidePromotions = next.hidePromotions !== false;
+      state.pageSettings = normalizePageSettings(next);
+      state.storyFilters = normalizeStoryFilters(next.storyFilters, next.hidePromotions);
       state.autoMoreEnabled = next.autoMore !== false;
       state.liveRefreshEnabled = next.liveRefresh !== false;
       state.imageSpoilerEnabled = next.imageSpoiler !== false;
+      state.shortenProjectLinksEnabled = next.shortenProjectLinks !== false;
       state.draftEnabled = next.draft !== false;
+      state.spaceshipMotionEnabled = next.spaceshipMotion !== false;
+      if (!state.spaceshipMotionEnabled) clearSpaceshipMotionEffects();
       document.documentElement.classList.toggle("entry-chat-image-spoiler-enabled", state.imageSpoilerEnabled);
       if (state.liveRefreshEnabled) startLiveRefresh();
       else stopLiveRefresh();
       processRoot(document);
+      shortenProjectLinks(document);
     });
     updateScrollUi();
     window.addEventListener("pagehide", () => {

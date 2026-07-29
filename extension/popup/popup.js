@@ -1,4 +1,3 @@
-// 해킹은 범죄입니다. LLNKKR 서비스와 API를 악용하지 마세요.
 (() => {
   "use strict";
 
@@ -7,9 +6,10 @@
     darkMode: false,
     draft: true,
     liveRefresh: true,
+    spaceshipMotion: true,
     autoMore: true,
-    hidePromotions: true,
     imageSpoiler: true,
+    shortenProjectLinks: true,
   };
 
   const storageGet = (keys) => new Promise((resolve) => chrome.storage.local.get(keys, resolve));
@@ -51,6 +51,5 @@
     input.checked = !input.checked;
     saveSetting("darkMode", input.checked);
   });
-
   initialize().catch(() => {});
 })();

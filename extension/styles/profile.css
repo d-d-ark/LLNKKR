@@ -1,4 +1,3 @@
-/* 해킹은 범죄입니다. LLNKKR 서비스와 API를 악용하지 마세요. */
 .entry-chat-profile-rainbow-link {
   display: inline;
   background-image: linear-gradient(90deg, #ff3b5f 0%, #ffb000 16%, #2ee66b 32%, #20d9ff 48%, #7b61ff 64%, #ff4fd8 80%, #ff3b5f 100%) !important;
@@ -23,4 +22,31 @@
   0% { background-position: 0% 50%; }
   50% { background-position: 100% 50%; }
   100% { background-position: 0% 50%; }
+}
+
+html.entry-chat-dark-mode.entry-chat-page-profile body [class~="css-m0nf83"][class~="ebifrqs1"],
+html.entry-chat-dark-mode.entry-chat-page-profile body button[class~="css-1oz7jgs"][class~="e1raq2kp3"].active {
+  background: transparent !important;
+  background-color: transparent !important;
+  background-image: none !important;
+  box-shadow: none !important;
+  transition: none !important;
+}
+
+html.entry-chat-dark-mode.entry-chat-page-profile body ul[class~="eu1ab6s0"] > li {
+  background: var(--entry-chat-dark-bg) !important;
+  border-bottom-color: #303846 !important;
+}
+
+html.entry-chat-dark-mode.entry-chat-page-profile body ul[class~="eu1ab6s0"] > li:hover {
+  background: var(--entry-chat-dark-surface) !important;
+}
+
+html.entry-chat-dark-mode.entry-chat-page-profile body ul[class~="eu1ab6s0"] > li > a :is(strong, p) {
+  color: #f5f7fb !important;
+}
+
+html.entry-chat-dark-mode.entry-chat-page-profile body ul[class~="eu1ab6s0"] > li [class~="eia26xn1"],
+html.entry-chat-dark-mode.entry-chat-page-profile body ul[class~="eu1ab6s0"] > li [class~="eia26xn1"] :is(span, em) {
+  color: #aeb5c0 !important;
 }

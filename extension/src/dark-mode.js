@@ -1,6 +1,7 @@
-// 해킹은 범죄입니다. LLNKKR 서비스와 API를 악용하지 마세요.
 (() => {
   "use strict";
+
+  document.documentElement.dataset.entryLlnkActive = "1";
 
   if (window.__entryLlnkDarkModeLoaded) return;
   window.__entryLlnkDarkModeLoaded = true;
@@ -33,6 +34,29 @@
     root.classList.toggle("entry-chat-page-profile", /^\/profile\/[a-f0-9]{24}(?:\/|$)/i.test(path));
     root.classList.toggle("entry-chat-page-ws", /^\/ws(?:\/|$)/.test(path));
     root.classList.toggle("entry-chat-page-home", path === "/");
+    root.classList.toggle("entry-chat-page-learn", /^\/learn(?:\/|$)/.test(path));
+    root.classList.toggle("entry-chat-page-study", /^\/study(?:\/|$)/.test(path));
+    root.classList.toggle("entry-chat-page-challenge", /^\/challenge(?:\/|$)/.test(path));
+    root.classList.toggle("entry-chat-page-about", /^\/about(?:\/|$)/.test(path));
+    root.classList.toggle("entry-chat-page-faq", /^\/faq(?:\/|$)/.test(path));
+    root.classList.toggle("entry-chat-page-download", /^\/download(?:\/|$)/.test(path));
+    root.classList.toggle("entry-chat-page-material", /^\/material(?:\/|$)/.test(path));
+    root.classList.toggle("entry-chat-page-onboarding", /^\/onboarding(?:\/|$)/.test(path));
+    root.classList.toggle("entry-chat-page-discovery", /^\/discovery(?:\/|$)/.test(path));
+  }
+
+  function applyPageSurfaceFixes() {
+    const selector = "[class~='e1qduyw34'] :is(h2, h3, h4, p, strong, em)";
+    const active = root.classList.contains("entry-chat-dark-mode") && /^\/about(?:\/|$)/.test(location.pathname);
+    document.querySelectorAll(selector).forEach((element) => {
+      if (active) {
+        element.style.setProperty("color", "#202124", "important");
+        element.dataset.entryLlnkAboutContrast = "1";
+      } else if (element.dataset.entryLlnkAboutContrast === "1") {
+        element.style.removeProperty("color");
+        delete element.dataset.entryLlnkAboutContrast;
+      }
+    });
   }
 
   function applyDarkMode(enabled) {
@@ -42,6 +66,7 @@
     root.classList.toggle("entry-chat-dark-mode", active);
     root.classList.remove("entry-chat-darker-mode");
     root.style.colorScheme = active ? "dark" : "";
+    applyPageSurfaceFixes();
     try {
       localStorage.setItem(CACHE_KEY, active ? "1" : "0");
     } catch (_) {}
@@ -93,5 +118,8 @@
     if (areaName !== "local" || !changes[SETTINGS_KEY]) return;
     applyDarkMode(Boolean(changes[SETTINGS_KEY].newValue?.darkMode));
   });
-  new MutationObserver(scheduleRouteRefresh).observe(root, { childList: true, subtree: true });
+  new MutationObserver(() => {
+    scheduleRouteRefresh();
+    applyPageSurfaceFixes();
+  }).observe(root, { childList: true, subtree: true });
 })();

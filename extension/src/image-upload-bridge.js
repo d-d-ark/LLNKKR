@@ -1,4 +1,3 @@
-// 해킹은 범죄입니다. LLNKKR 서비스와 API를 악용하지 마세요.
 (() => {
   "use strict";
 
@@ -61,14 +60,43 @@
     return "";
   }
 
+  function scanError(doc, depth = 0) {
+    if (!doc || depth > 4) return "";
+    const nodes = [...doc.querySelectorAll('[role="alert"], [role="dialog"], [aria-modal="true"], [aria-live="assertive"], [aria-live="polite"], .css-ye9ri9.e10kbqtd0, [class*="error"], [class*="Error"], [class*="toast"], [class*="Toast"]')];
+    for (const node of nodes) {
+      const style = doc.defaultView?.getComputedStyle(node);
+      if (style?.display === "none" || style?.visibility === "hidden") continue;
+      const message = String(node.textContent || "").replace(/\s+/g, " ").trim();
+      const uploadFailure = /요청을\s*처리하지\s*못했습니다|(?:업로드|파일|이미지).{0,60}(?:실패|오류|초과|불가|지원하지|처리하지|너무\s*(?:크|큽)|제한)|(?:실패|오류|초과|불가|지원하지|처리하지).{0,60}(?:업로드|파일|이미지)|(?:최대|제한).{0,40}(?:MB|KB|GB|용량|크기)/i;
+      if (message && uploadFailure.test(message)) return message.slice(0, 180);
+    }
+    const invalidInput = [...doc.querySelectorAll('input[type="file"]')].find((input) => input.validity && !input.validity.valid);
+    const validationMessage = String(invalidInput?.validationMessage || "").replace(/\s+/g, " ").trim();
+    if (validationMessage) return validationMessage.slice(0, 180);
+    for (const frame of doc.querySelectorAll("iframe, frame")) {
+      try {
+        const nested = scanError(frame.contentDocument, depth + 1);
+        if (nested) return nested;
+      } catch (_) {}
+    }
+    return "";
+  }
+
   let lastUrl = "";
+  let lastError = "";
   let interval = 0;
   let observer = null;
   const notify = () => {
     const imageUrl = scanDocument(document);
-    if (!imageUrl || imageUrl === lastUrl) return;
-    lastUrl = imageUrl;
-    window.top.postMessage({ source: "entry-llnk-image-upload", imageUrl }, "https://playentry.org");
+    if (imageUrl && imageUrl !== lastUrl) {
+      lastUrl = imageUrl;
+      window.top.postMessage({ source: "entry-llnk-image-upload", imageUrl }, "https://playentry.org");
+      return;
+    }
+    const error = scanError(document);
+    if (!error || error === lastError) return;
+    lastError = error;
+    window.top.postMessage({ source: "entry-llnk-image-upload", error }, "https://playentry.org");
   };
   const stop = () => {
     observer?.disconnect();
